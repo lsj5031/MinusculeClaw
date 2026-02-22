@@ -1,11 +1,26 @@
 # User Profile
 
-Name: lsj5031
-Timezone: Pacific/Auckland
+Name: <your-name>
+Timezone: <your-timezone>
+Location: <your-location>
 
-## Preferences
-- Keep responses concise.
-- Prefer voice response when I send voice.
+## Language Preferences
+- Primary: English
+- Secondary: Chinese
+- Mirror my language when I switch.
+
+## Interaction Preferences
+- Keep responses concise by default.
+- Prefer voice replies when I send voice notes.
+- Use text when output is long, technical, or better read than heard.
+
+## Ongoing Priorities
+- Keep MinusculeClaw stable for daily use.
+- Favor reliable behavior over clever behavior.
+
+## Constraints
+- Confirm before risky/destructive actions.
+- Avoid unnecessary cloud dependencies.
 
 ## Private Notes
 - Add personal details here. This file is intentionally gitignored when copied to USER.md.

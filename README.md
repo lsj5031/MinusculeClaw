@@ -4,9 +4,9 @@ Single-file bash-powered personal voice agent that runs locally and talks over T
 
 ## What it does
 - Telegram text and voice input.
-- Local ASR via GlmAsrDocker (`ASR_URL`, default `http://localhost:18000`) or local `glm-asr` command.
+- Local ASR via your own backend (HTTP endpoint or CLI).
 - Agent loop via Codex CLI (`codex exec --yolo`).
-- Local TTS via `kitten-tts`/`kitten-tts-rs` -> Opus OGG -> Telegram `sendVoice`.
+- Local TTS backend -> Opus OGG -> Telegram `sendVoice`.
 - Persistent state in SQLite + human-readable markdown files.
 - Daily logs and optional proactive heartbeat.
 - Optional local dashboard on `http://localhost:8080`.
@@ -25,57 +25,38 @@ Single-file bash-powered personal voice agent that runs locally and talks over T
 - Bash 5+
 - `curl`, `jq`, `ffmpeg`, `sqlite3`
 - `codex` CLI in `PATH`
-- `kitten-tts` or `kitten-tts-rs` in `PATH`
-- Either running ASR endpoint (`ASR_URL`) or `glm-asr` in `PATH`
+- A working ASR backend
+- A working TTS backend
+
+Recommended backends:
+- ASR: https://github.com/lsj5031/GlmAsrDocker
+- TTS: https://github.com/lsj5031/kitten-tts-rs
 
 ## Quick start
 ```bash
-git clone https://github.com/lsj5031/minusculeclaw.git
-cd minusculeclaw
+git clone https://github.com/lsj5031/MinusculeClaw.git
+cd MinusculeClaw
 ./setup.sh
 ./agent.sh
 ```
 
 ## Environment contract
-Copy `.env.example` to `.env` and set:
+Copy `.env.example` to `.env`, then set at minimum:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
-- `TTS_CMD_TEMPLATE`
+- `CODEX_BIN` (if `codex` is not in systemd/user PATH)
 
-If your binaries are in user-local install location, keep this in `.env`:
-```env
-PATH="$HOME/.local/bin:$PATH"
-```
+Then choose one ASR mode:
+- `ASR_URL` for HTTP ASR service
+- or `ASR_CMD_TEMPLATE` for CLI-based ASR
 
-`TTS_CMD_TEMPLATE` is executed with two exported vars:
-- `TEXT`: reply text
-- `WAV_OUTPUT`: output wav path
+And set `TTS_CMD_TEMPLATE` for your TTS command.
 
-For `kitten-tts`, use the same runtime-libs pattern as `kitten-say`:
-```env
-ORT_LIB="$HOME/.local/opt/onnxruntime/onnxruntime-linux-x64-gpu-1.23.2/lib/libonnxruntime.so"
-CUDA_LIB_DIR="$HOME/.local/opt/cuda12-runtime/lib"
-CUDNN_LIB_DIR="/usr/lib"
-TTS_CMD_TEMPLATE='kitten-tts synthesize --phonemizer espeak-ng ${ORT_LIB:+--ort-lib "$ORT_LIB"} ${CUDA_LIB_DIR:+--cuda-lib-dir "$CUDA_LIB_DIR"} ${CUDNN_LIB_DIR:+--cudnn-lib-dir "$CUDNN_LIB_DIR"} --text "$TEXT" --output "$WAV_OUTPUT"'
-```
+MinusculeClaw passes:
+- `AUDIO_INPUT` and `AUDIO_INPUT_PREP` to ASR command templates
+- `TEXT` and `WAV_OUTPUT` to TTS command templates
 
-ASR supports two modes:
-- HTTP mode: set `ASR_URL=...` (and optional `ASR_TEXT_JQ`).
-- Command mode: set `ASR_CMD_TEMPLATE`, which runs with `AUDIO_INPUT` and `AUDIO_INPUT_PREP` exported.
-- With `ASR_PREPROCESS=on` (default), incoming Telegram voice is normalized to mono WAV before ASR for better quality.
-
-Example command mode:
-```env
-ASR_PREPROCESS=on
-ASR_SAMPLE_RATE=16000
-ASR_CMD_TEMPLATE='glm-asr transcribe "$AUDIO_INPUT_PREP"'
-```
-
-To reduce clipped/truncated voice replies, long text is split into chunks before synthesis.
-Tune chunk size with:
-```env
-TTS_MAX_CHARS=260
-```
+For backend-specific install/runtime flags, use the backend repos above.
 
 ## Codex output contract
 MinusculeClaw expects strict markers in Codex output:
@@ -88,9 +69,8 @@ If markers are missing, MinusculeClaw sends a safe fallback text reply and logs 
 
 ## Ingress modes
 - `WEBHOOK_MODE=off` (default): long polling (`getUpdates`).
-- `WEBHOOK_MODE=on`: consume updates from `runtime/webhook_updates.jsonl`.
-  - Run webhook receiver with `./webhook_server.py`.
-  - Configure Telegram webhook separately or via `setup.sh` if `WEBHOOK_PUBLIC_URL` is set.
+- `WEBHOOK_MODE=on`: consume updates from `runtime/webhook_updates.jsonl`; run webhook receiver with `./webhook_server.py`.
+- `WEBHOOK_PUBLIC_URL`: optional; if set, `setup.sh` can register Telegram webhook.
 
 ## systemd (user)
 ```bash
