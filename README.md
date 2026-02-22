@@ -16,6 +16,7 @@ No servers. No heavy frameworks. No Docker-compose. Maximum privacy and hackabil
 - Persistent memory & tasks you can read/edit by hand (`cat MEMORY.md`)
 - Uses OpenAI **Codex CLI** as the brain (it can actually read/write your files)
 - Live progress updates in Telegram (edits message with what Codex is doing)
+- `/cancel` command to interrupt long-running requests mid-execution
 - Local web dashboard (`http://localhost:8080`)
 - Optional daily heartbeat (the bot can message you proactively)
 - Three safety modes: `strict` | `allowlist` | `yolo`
