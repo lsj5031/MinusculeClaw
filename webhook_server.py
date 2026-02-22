@@ -81,6 +81,11 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(msg, dict) and (msg.get("text") or "").strip().lower() == "/cancel":
             _signal_cancel()
 
+        # Detect cancel button callback
+        cb = data.get("callback_query") if isinstance(data, dict) else None
+        if isinstance(cb, dict) and cb.get("data") == "cancel":
+            _signal_cancel()
+
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"ok")

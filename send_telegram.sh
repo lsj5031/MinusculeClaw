@@ -17,6 +17,7 @@ file_path=""
 caption=""
 edit_msg_id=""
 return_id=""
+with_cancel_btn=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,6 +62,20 @@ while [[ $# -gt 0 ]]; do
       mode="typing"
       shift
       ;;
+    --with-cancel-btn)
+      with_cancel_btn="true"
+      shift
+      ;;
+    --remove-keyboard)
+      mode="remove_keyboard"
+      edit_msg_id="$2"
+      shift 2
+      ;;
+    --answer-callback)
+      mode="answer_callback"
+      msg="$2"
+      shift 2
+      ;;
     *)
       echo "unknown arg: $1" >&2
       exit 1
@@ -69,6 +84,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 api_base="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}"
+
+cancel_keyboard='{"inline_keyboard":[[{"text":"Cancel","callback_data":"cancel"}]]}'
 
 send_file() {
   local method="$1"
@@ -89,22 +106,50 @@ send_file() {
 case "$mode" in
   text)
     if [[ -n "$edit_msg_id" ]]; then
-      curl -fsS "$api_base/editMessageText" \
-        -d "chat_id=$TELEGRAM_CHAT_ID" \
-        -d "message_id=$edit_msg_id" \
-        --data-urlencode "text=$msg" \
-        -d "disable_web_page_preview=true" >/dev/null
+      if [[ -n "$with_cancel_btn" ]]; then
+        curl -fsS "$api_base/editMessageText" \
+          -d "chat_id=$TELEGRAM_CHAT_ID" \
+          -d "message_id=$edit_msg_id" \
+          --data-urlencode "text=$msg" \
+          -d "disable_web_page_preview=true" \
+          --data-urlencode "reply_markup=$cancel_keyboard" >/dev/null
+      else
+        curl -fsS "$api_base/editMessageText" \
+          -d "chat_id=$TELEGRAM_CHAT_ID" \
+          -d "message_id=$edit_msg_id" \
+          --data-urlencode "text=$msg" \
+          -d "disable_web_page_preview=true" >/dev/null
+      fi
     elif [[ "$return_id" == "true" ]]; then
-      curl -fsS "$api_base/sendMessage" \
-        -d "chat_id=$TELEGRAM_CHAT_ID" \
-        --data-urlencode "text=$msg" \
-        -d "disable_web_page_preview=true" | jq -r '.result.message_id'
+      if [[ -n "$with_cancel_btn" ]]; then
+        curl -fsS "$api_base/sendMessage" \
+          -d "chat_id=$TELEGRAM_CHAT_ID" \
+          --data-urlencode "text=$msg" \
+          -d "disable_web_page_preview=true" \
+          --data-urlencode "reply_markup=$cancel_keyboard" | jq -r '.result.message_id'
+      else
+        curl -fsS "$api_base/sendMessage" \
+          -d "chat_id=$TELEGRAM_CHAT_ID" \
+          --data-urlencode "text=$msg" \
+          -d "disable_web_page_preview=true" | jq -r '.result.message_id'
+      fi
     else
       curl -fsS "$api_base/sendMessage" \
         -d "chat_id=$TELEGRAM_CHAT_ID" \
         --data-urlencode "text=$msg" \
         -d "disable_web_page_preview=true" >/dev/null
     fi
+    ;;
+  remove_keyboard)
+    curl -fsS "$api_base/editMessageReplyMarkup" \
+      -d "chat_id=$TELEGRAM_CHAT_ID" \
+      -d "message_id=$edit_msg_id" \
+      -d "reply_markup={}" >/dev/null
+    ;;
+  answer_callback)
+    curl -fsS "$api_base/answerCallbackQuery" \
+      -d "callback_query_id=$msg" \
+      -d "text=Cancelled" >/dev/null
     ;;
   typing)
     curl -fsS "$api_base/sendChatAction" \

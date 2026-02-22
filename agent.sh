@@ -126,6 +126,10 @@ send_or_edit_text() {
   if [[ -z "$(trim "$text")" ]]; then
     return 0
   fi
+  # Remove inline keyboard if present
+  if [[ -n "$msg_id" ]]; then
+    "$ROOT_DIR/send_telegram.sh" --remove-keyboard "$msg_id" 2>/dev/null || true
+  fi
   local max=4096
   if (( ${#text} <= max )); then
     if [[ -n "$msg_id" ]] && "$ROOT_DIR/send_telegram.sh" --edit "$msg_id" --text "$text" 2>/dev/null; then
@@ -215,9 +219,9 @@ check_cancel_poll() {
 
   resp="$(curl -fsS "$api_base/getUpdates" \
     -d "offset=$offset" -d "timeout=0" \
-    -d 'allowed_updates=["message"]' 2>/dev/null)" || return 0
+    -d 'allowed_updates=["message","callback_query"]' 2>/dev/null)" || return 0
 
-  local cancel_uid
+  local cancel_uid cancel_cb_id
   cancel_uid="$(jq -r --arg cid "$TELEGRAM_CHAT_ID" '
     [.result[] | select(
       (.message.chat.id | tostring) == $cid and
@@ -225,7 +229,18 @@ check_cancel_poll() {
     )] | last | .update_id // empty
   ' <<< "$resp" 2>/dev/null)" || return 0
 
-  if [[ -n "$cancel_uid" ]]; then
+  cancel_cb_id="$(jq -r --arg cid "$TELEGRAM_CHAT_ID" '
+    [.result[] | select(
+      (.callback_query.message.chat.id | tostring) == $cid and
+      (.callback_query.data // "") == "cancel"
+    )] | last | .callback_query.id // empty
+  ' <<< "$resp" 2>/dev/null)" || return 0
+
+  if [[ -n "$cancel_cb_id" ]]; then
+    log_info "cancel button callback detected"
+    "$ROOT_DIR/send_telegram.sh" --answer-callback "$cancel_cb_id" 2>/dev/null || true
+    touch "$CANCEL_FILE"
+  elif [[ -n "$cancel_uid" ]]; then
     log_info "cancel command detected via poll (update_id=$cancel_uid)"
     touch "$CANCEL_FILE"
   fi
@@ -474,7 +489,7 @@ handle_user_message() {
   build_context_file "$input_type" "$user_text" "$asr_text" "$context_file" "$attachment_type" "$attachment_path"
 
   local progress_msg_id=""
-  progress_msg_id="$("$ROOT_DIR/send_telegram.sh" --text "⏳ Thinking…" --return-id 2>/dev/null)" || true
+  progress_msg_id="$("$ROOT_DIR/send_telegram.sh" --text "⏳ Thinking…" --return-id --with-cancel-btn 2>/dev/null)" || true
   "$ROOT_DIR/send_telegram.sh" --typing 2>/dev/null || true
 
   local codex_output=""
