@@ -14,7 +14,7 @@ api_base="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}"
 
 case "${1:-}" in
   register)
-    args=(-d "url=${WEBHOOK_PUBLIC_URL}" -d 'allowed_updates=["message"]' -d "max_connections=5")
+    args=(-d "url=${WEBHOOK_PUBLIC_URL}" -d 'allowed_updates=["message","callback_query"]' -d "max_connections=5")
     if [[ -n "$WEBHOOK_SECRET" ]]; then
       args+=(-d "secret_token=$WEBHOOK_SECRET")
     fi

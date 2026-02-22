@@ -543,7 +543,7 @@ handle_user_message() {
     fi
     if safe_send_voice "$spoken_text"; then
       if [[ -n "$progress_msg_id" ]]; then
-        "$ROOT_DIR/send_telegram.sh" --edit "$progress_msg_id" --text "${telegram_reply:-🔊}" 2>/dev/null || true
+        send_or_edit_text "$progress_msg_id" "${telegram_reply:-🔊}"
       fi
     else
       send_or_edit_text "$progress_msg_id" "$telegram_reply"
@@ -554,7 +554,7 @@ handle_user_message() {
     elif [[ -n "$voice_reply" ]]; then
       if safe_send_voice "$voice_reply"; then
         if [[ -n "$progress_msg_id" ]]; then
-          "$ROOT_DIR/send_telegram.sh" --edit "$progress_msg_id" --text "🔊" 2>/dev/null || true
+          send_or_edit_text "$progress_msg_id" "🔊"
         fi
       else
         send_or_edit_text "$progress_msg_id" "Voice output failed locally; please retry."
