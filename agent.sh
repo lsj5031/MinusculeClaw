@@ -58,6 +58,7 @@ validate_runtime_requirements() {
   fi
 
   ensure_dirs
+  find "$ROOT_DIR/tmp" -maxdepth 1 \( -name "context_*" -o -name "codex_last_*" \) -mmin +30 -delete 2>/dev/null || true
   if [[ ! -f "$SQLITE_DB_PATH" ]]; then
     sqlite3 "$SQLITE_DB_PATH" < "$ROOT_DIR/sql/schema.sql"
   fi
@@ -90,7 +91,8 @@ safe_send_text() {
 safe_send_voice() {
   local text="$1"
   local caption="${2:-}"
-  local voice_file="$ROOT_DIR/tmp/reply_$(date +%s%N).ogg"
+  local voice_file
+  voice_file="$ROOT_DIR/tmp/reply_$(date +%s%N).ogg"
 
   if "$ROOT_DIR/tts_to_voice.sh" "$text" "$voice_file" >/dev/null; then
     local -a send_cmd
@@ -201,7 +203,8 @@ build_context_file() {
 
 run_codex() {
   local context_file="$1"
-  local out_file="$ROOT_DIR/tmp/codex_last_$(date +%s%N).txt"
+  local out_file
+  out_file="$ROOT_DIR/tmp/codex_last_$(date +%s%N).txt"
   local -a cmd
   cmd=("$CODEX_BIN" exec --cd "$ROOT_DIR" --skip-git-repo-check --output-last-message "$out_file")
 
@@ -270,7 +273,8 @@ handle_user_message() {
   local ts
   ts="$(iso_now)"
   log_info "processing input_type=$input_type chat_id=$chat_id"
-  local context_file="$ROOT_DIR/tmp/context_$(date +%s%N).md"
+  local context_file
+  context_file="$ROOT_DIR/tmp/context_$(date +%s%N).md"
   build_context_file "$input_type" "$user_text" "$asr_text" "$context_file"
 
   local codex_output=""
@@ -388,7 +392,7 @@ process_update_obj() {
     local voice_in="$ROOT_DIR/tmp/in_${update_id}.oga"
     if download_voice_file "$voice_file_id" "$voice_in"; then
       set +e
-      asr_text="$($ROOT_DIR/asr.sh "$voice_in")"
+      asr_text="$("$ROOT_DIR/asr.sh" "$voice_in")"
       local asr_rc=$?
       set -e
       rm -f "$voice_in"
@@ -464,9 +468,9 @@ poll_once() {
 
   empty_polls=0
   log_info "received $count update(s)"
-  jq -c '.result[]?' <<< "$resp" | while IFS= read -r obj; do
+  while IFS= read -r obj; do
     process_update_obj "$obj"
-  done
+  done < <(jq -c '.result[]?' <<< "$resp")
 }
 
 main_loop() {
