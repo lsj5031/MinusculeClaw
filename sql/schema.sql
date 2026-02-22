@@ -16,8 +16,10 @@ CREATE TABLE IF NOT EXISTS turns (
   codex_raw TEXT NOT NULL,
   telegram_reply TEXT,
   voice_reply TEXT,
-  status TEXT NOT NULL
+  status TEXT NOT NULL,
+  update_id TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_update_id_unique ON turns(update_id);
 
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

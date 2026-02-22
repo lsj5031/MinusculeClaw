@@ -42,6 +42,23 @@ log_debug() {
   fi
 }
 
+ensure_db_migrations() {
+  local has_turns
+  has_turns="$(sqlite3 "$SQLITE_DB_PATH" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns' LIMIT 1;")"
+  if [[ "$has_turns" != "1" ]]; then
+    sqlite3 "$SQLITE_DB_PATH" < "$ROOT_DIR/sql/schema.sql"
+  fi
+
+  local has_update_id
+  has_update_id="$(sqlite3 "$SQLITE_DB_PATH" "SELECT 1 FROM pragma_table_info('turns') WHERE name='update_id' LIMIT 1;")"
+  if [[ "$has_update_id" != "1" ]]; then
+    log_info "db migration: adding turns.update_id column"
+    sqlite_exec "ALTER TABLE turns ADD COLUMN update_id TEXT;"
+  fi
+
+  sqlite_exec "CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_update_id_unique ON turns(update_id);"
+}
+
 validate_runtime_requirements() {
   : "${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is required in .env}"
   : "${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID is required in .env}"
@@ -65,6 +82,7 @@ validate_runtime_requirements() {
   if [[ ! -f "$SQLITE_DB_PATH" ]]; then
     sqlite3 "$SQLITE_DB_PATH" < "$ROOT_DIR/sql/schema.sql"
   fi
+  ensure_db_migrations
 
   api_base="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}"
   file_base="https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}"
@@ -459,6 +477,32 @@ run_codex() {
   return $rc
 }
 
+turn_exists_for_update_id() {
+  local update_id="$1"
+  if [[ -z "$(trim "$update_id")" ]]; then
+    return 1
+  fi
+
+  local found
+  found="$(sqlite3 "$SQLITE_DB_PATH" "SELECT 1 FROM turns WHERE update_id=$(sql_quote "$update_id") LIMIT 1;")"
+  [[ "$found" == "1" ]]
+}
+
+set_inflight_update() {
+  local update_id="$1"
+  local payload_json="$2"
+  local started_at
+  started_at="$(iso_now)"
+
+  set_kv "inflight_update_id" "$update_id"
+  set_kv "inflight_update_json" "$payload_json"
+  set_kv "inflight_started_at" "$started_at"
+}
+
+clear_inflight_update() {
+  sqlite_exec "DELETE FROM kv WHERE key IN ('inflight_update_id', 'inflight_update_json', 'inflight_started_at');"
+}
+
 store_turn() {
   local ts="$1"
   local chat_id="$2"
@@ -469,8 +513,16 @@ store_turn() {
   local telegram_reply="$7"
   local voice_reply="$8"
   local status="$9"
+  local update_id="${10:-}"
+  local update_id_sql="NULL"
+  if [[ -n "$(trim "$update_id")" ]]; then
+    update_id_sql="$(sql_quote "$update_id")"
+  fi
 
-  sqlite_exec "INSERT INTO turns(ts, chat_id, input_type, user_text, asr_text, codex_raw, telegram_reply, voice_reply, status) VALUES($(sql_quote "$ts"), $(sql_quote "$chat_id"), $(sql_quote "$input_type"), $(sql_quote "$user_text"), $(sql_quote "$asr_text"), $(sql_quote "$codex_raw"), $(sql_quote "$telegram_reply"), $(sql_quote "$voice_reply"), $(sql_quote "$status"));"
+  local changes
+  changes="$(sqlite3 "$SQLITE_DB_PATH" "INSERT OR IGNORE INTO turns(ts, chat_id, input_type, user_text, asr_text, codex_raw, telegram_reply, voice_reply, status, update_id) VALUES($(sql_quote "$ts"), $(sql_quote "$chat_id"), $(sql_quote "$input_type"), $(sql_quote "$user_text"), $(sql_quote "$asr_text"), $(sql_quote "$codex_raw"), $(sql_quote "$telegram_reply"), $(sql_quote "$voice_reply"), $(sql_quote "$status"), $update_id_sql); SELECT changes();")"
+  changes="${changes##*$'\n'}"
+  printf '%s\n' "${changes:-0}"
 }
 
 handle_user_message() {
@@ -480,6 +532,7 @@ handle_user_message() {
   local chat_id="$4"
   local attachment_type="${5:-}"
   local attachment_path="${6:-}"
+  local update_id="${7:-}"
 
   local ts
   ts="$(iso_now)"
@@ -502,7 +555,15 @@ handle_user_message() {
 
   if [[ $codex_rc -eq 130 ]]; then
     send_or_edit_text "$progress_msg_id" "❌ Cancelled."
-    store_turn "$ts" "$chat_id" "$input_type" "$user_text" "$asr_text" "" "" "" "cancelled"
+    local cancel_inserted
+    cancel_inserted="$(store_turn "$ts" "$chat_id" "$input_type" "$user_text" "$asr_text" "" "" "" "cancelled" "$update_id")"
+    if [[ "$cancel_inserted" != "1" ]]; then
+      log_info "dedup skip for cancelled update_id=$update_id"
+      if [[ -n "$attachment_path" && -f "$attachment_path" ]]; then
+        rm -f "$attachment_path"
+      fi
+      return 0
+    fi
     local cancel_log
     cancel_log="$(printf "## %s\n- input_type: %s\n- user_text: %s\n- status: cancelled\n" "$ts" "$input_type" "$user_text")"
     append_daily_log "$cancel_log"
@@ -581,8 +642,17 @@ handle_user_message() {
     fi
   done
 
+  local turn_inserted
+  turn_inserted="$(store_turn "$ts" "$chat_id" "$input_type" "$user_text" "$asr_text" "$codex_output" "$telegram_reply" "$voice_reply" "$codex_status" "$update_id")"
+  if [[ "$turn_inserted" != "1" ]]; then
+    log_info "dedup skip for completed update_id=$update_id"
+    if [[ -n "$attachment_path" && -f "$attachment_path" ]]; then
+      rm -f "$attachment_path"
+    fi
+    return 0
+  fi
+
   append_memory_and_tasks "$codex_output"
-  store_turn "$ts" "$chat_id" "$input_type" "$user_text" "$asr_text" "$codex_output" "$telegram_reply" "$voice_reply" "$codex_status"
   log_info "reply complete status=$codex_status"
 
   if [[ -n "$attachment_path" && -f "$attachment_path" ]]; then
@@ -629,12 +699,28 @@ download_telegram_file() {
   curl -fsS "$file_base/$file_path" -o "$out_path"
 }
 
+extract_update_id() {
+  local obj="$1"
+  jq -r '.update_id // 0' <<< "$obj" 2>/dev/null || printf '0\n'
+}
+
 process_update_obj() {
   local obj="$1"
-  local update_id chat_id message_text voice_file_id input_type
+  local source_mode="${2:-poll}"
+  local update_id chat_id message_text voice_file_id input_type turn_update_id
 
-  update_id="$(jq -r '.update_id // 0' <<< "$obj")"
+  update_id="$(extract_update_id "$obj")"
   chat_id="$(jq -r '.message.chat.id // empty' <<< "$obj")"
+  turn_update_id=""
+  if [[ "$update_id" != "0" ]]; then
+    turn_update_id="$update_id"
+  fi
+
+  if [[ -n "$turn_update_id" ]] && turn_exists_for_update_id "$turn_update_id"; then
+    log_info "dedup hit update_id=$turn_update_id source=$source_mode"
+    set_kv "last_update_id" "$update_id"
+    return 0
+  fi
 
   if [[ -z "$chat_id" ]]; then
     log_debug "update_id=$update_id has no chat_id; skipping"
@@ -654,6 +740,12 @@ process_update_obj() {
         kill -TERM "$cancel_pid" 2>/dev/null || true
       fi
     fi
+    set_kv "last_update_id" "$update_id"
+    return 0
+  fi
+
+  if [[ "$chat_id" != "$TELEGRAM_CHAT_ID" ]]; then
+    log_debug "ignored update_id=$update_id for unmatched chat_id=$chat_id"
     set_kv "last_update_id" "$update_id"
     return 0
   fi
@@ -736,17 +828,17 @@ process_update_obj() {
     effective_text="(empty message)"
   fi
 
-  if [[ "$chat_id" == "$TELEGRAM_CHAT_ID" ]]; then
-    log_debug "accepted update_id=$update_id for configured chat_id"
-    handle_user_message "$input_type" "$effective_text" "$asr_text" "$chat_id" "$attachment_type" "$attachment_path"
-  else
-    log_debug "ignored update_id=$update_id for unmatched chat_id=$chat_id"
+  if [[ "$source_mode" == "webhook" || "$source_mode" == "webhook_restore" ]]; then
+    set_inflight_update "$turn_update_id" "$obj"
   fi
+
+  log_debug "accepted update_id=$update_id for configured chat_id"
+  handle_user_message "$input_type" "$effective_text" "$asr_text" "$chat_id" "$attachment_type" "$attachment_path" "$turn_update_id"
 
   set_kv "last_update_id" "$update_id"
 }
 
-consume_webhook_queue_line() {
+peek_webhook_queue_line() {
   local queue_file="$ROOT_DIR/runtime/webhook_updates.jsonl"
   local lock_file="$ROOT_DIR/runtime/webhook_queue.lock"
   (
@@ -755,22 +847,134 @@ consume_webhook_queue_line() {
       exit 1
     fi
     head -n 1 "$queue_file"
-    tail -n +2 "$queue_file" > "$queue_file.tmp" || true
-    mv "$queue_file.tmp" "$queue_file"
   ) 9>"$lock_file"
+}
+
+ack_webhook_queue_line() {
+  local expected_update_id="${1:-}"
+  local queue_file="$ROOT_DIR/runtime/webhook_updates.jsonl"
+  local lock_file="$ROOT_DIR/runtime/webhook_queue.lock"
+  (
+    flock -w 2 9
+    if [[ ! -s "$queue_file" ]]; then
+      exit 1
+    fi
+    local head_line head_update_id tmp_file
+    head_line="$(head -n 1 "$queue_file")"
+    if [[ -n "$expected_update_id" ]]; then
+      head_update_id="$(extract_update_id "$head_line")"
+      if [[ "$head_update_id" != "$expected_update_id" ]]; then
+        exit 2
+      fi
+    fi
+    tmp_file="$queue_file.tmp.$$"
+    tail -n +2 "$queue_file" > "$tmp_file" || true
+    mv "$tmp_file" "$queue_file"
+  ) 9>"$lock_file"
+}
+
+restore_inflight_update() {
+  local inflight_json inflight_update_id ack_rc restore_rc
+  inflight_json="$(get_kv "inflight_update_json" 2>/dev/null || true)"
+  if [[ -z "$(trim "$inflight_json")" ]]; then
+    return 0
+  fi
+
+  inflight_update_id="$(get_kv "inflight_update_id" 2>/dev/null || true)"
+  if [[ -z "$(trim "$inflight_update_id")" || "$inflight_update_id" == "0" ]]; then
+    inflight_update_id="$(extract_update_id "$inflight_json")"
+  fi
+  if [[ "$inflight_update_id" == "0" ]]; then
+    inflight_update_id=""
+  fi
+
+  log_info "inflight restore update_id=${inflight_update_id:-unknown}"
+  if [[ -n "$inflight_update_id" ]] && turn_exists_for_update_id "$inflight_update_id"; then
+    log_info "dedup hit during inflight restore update_id=$inflight_update_id"
+    clear_inflight_update
+    set +e
+    ack_webhook_queue_line "$inflight_update_id"
+    ack_rc=$?
+    set -e
+    if [[ $ack_rc -eq 0 ]]; then
+      log_info "webhook ack update_id=$inflight_update_id (restore dedup)"
+    elif [[ $ack_rc -eq 2 ]]; then
+      log_warn "webhook ack skipped on restore due head mismatch update_id=$inflight_update_id"
+    else
+      log_warn "webhook ack failed on restore update_id=$inflight_update_id rc=$ack_rc"
+    fi
+    return 0
+  fi
+
+  set +e
+  process_update_obj "$inflight_json" "webhook_restore"
+  restore_rc=$?
+  set -e
+  if [[ $restore_rc -ne 0 ]]; then
+    log_warn "inflight restore failed update_id=${inflight_update_id:-unknown} rc=$restore_rc"
+    return $restore_rc
+  fi
+
+  clear_inflight_update
+  if [[ -n "$inflight_update_id" ]]; then
+    set +e
+    ack_webhook_queue_line "$inflight_update_id"
+    ack_rc=$?
+    set -e
+    if [[ $ack_rc -eq 0 ]]; then
+      log_info "webhook ack update_id=$inflight_update_id (restore)"
+    elif [[ $ack_rc -eq 2 ]]; then
+      log_warn "webhook ack skipped on restore due head mismatch update_id=$inflight_update_id"
+    else
+      log_warn "webhook ack failed on restore update_id=$inflight_update_id rc=$ack_rc"
+    fi
+  else
+    log_warn "restore completed without update_id; leaving queue head untouched"
+  fi
 }
 
 drain_webhook_queue() {
   while true; do
-    local obj
+    local obj rc update_id ack_rc
     set +e
-    obj="$(consume_webhook_queue_line)"
-    local rc=$?
+    obj="$(peek_webhook_queue_line)"
+    rc=$?
     set -e
     if [[ $rc -ne 0 || -z "$(trim "$obj")" ]]; then
       break
     fi
-    process_update_obj "$obj"
+
+    update_id="$(extract_update_id "$obj")"
+    log_debug "webhook peek update_id=$update_id"
+
+    set +e
+    process_update_obj "$obj" "webhook"
+    rc=$?
+    set -e
+    if [[ $rc -ne 0 ]]; then
+      log_warn "webhook processing failed update_id=$update_id rc=$rc (will retry)"
+      break
+    fi
+
+    clear_inflight_update
+    set +e
+    if [[ "$update_id" != "0" ]]; then
+      ack_webhook_queue_line "$update_id"
+    else
+      ack_webhook_queue_line
+    fi
+    ack_rc=$?
+    set -e
+    if [[ $ack_rc -eq 0 ]]; then
+      log_info "webhook ack update_id=$update_id"
+      continue
+    fi
+    if [[ $ack_rc -eq 2 ]]; then
+      log_warn "webhook ack skipped due head mismatch update_id=$update_id"
+    else
+      log_warn "webhook ack failed update_id=$update_id rc=$ack_rc"
+    fi
+    break
   done
 }
 
@@ -789,6 +993,7 @@ webhook_loop() {
   exec 3<>"$notify_fifo"
   log_info "webhook loop: waiting on $notify_fifo"
 
+  restore_inflight_update || true
   drain_webhook_queue
 
   while true; do
