@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/minusculeclaw
 EnvironmentFile=%h/minusculeclaw/.env
-ExecStart=/usr/bin/env bash -lc 'cd %h/minusculeclaw && ./agent.sh'
+ExecStart=/bin/bash -lc 'cd %h/minusculeclaw && ./agent.sh'
 Restart=always
 RestartSec=3
 
