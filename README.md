@@ -8,7 +8,7 @@ Send a voice note → local ASR on your laptop → Codex CLI (with real file acc
 
 No servers. No heavy frameworks. No Docker-compose. Maximum privacy and hackability.
 
-<img src="docs/images/shellclaw-avatar.jpg" alt="ShellClaw project avatar" width="280" />
+<img src="ShellClaw.png" alt="ShellClaw project logo" width="560" />
 
 ## ✨ Why people love it
 
@@ -21,10 +21,6 @@ No servers. No heavy frameworks. No Docker-compose. Maximum privacy and hackabil
 - Optional daily heartbeat (the bot can message you proactively)
 - Three safety modes: `strict` | `allowlist` | `yolo`
 - Works great in English and Chinese (and likely more)
-
-## Logo
-
-![ShellClaw logo](ShellClaw.png)
 
 ## 🚀 Quick Start
 
