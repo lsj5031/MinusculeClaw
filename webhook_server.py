@@ -2,18 +2,36 @@
 import fcntl
 import json
 import os
+import signal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 QUEUE_PATH = os.path.join(ROOT_DIR, "runtime", "webhook_updates.jsonl")
 LOCK_PATH = os.path.join(ROOT_DIR, "runtime", "webhook_queue.lock")
 FIFO_PATH = os.path.join(ROOT_DIR, "runtime", "webhook_notify.fifo")
+CANCEL_PATH = os.path.join(ROOT_DIR, "runtime", "cancel")
+PID_PATH = os.path.join(ROOT_DIR, "runtime", "codex.pid")
 BIND = os.environ.get("WEBHOOK_BIND", "127.0.0.1:8787")
 HOST, PORT = BIND.rsplit(":", 1)
 PORT = int(PORT)
 SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
 os.makedirs(os.path.dirname(QUEUE_PATH), exist_ok=True)
+
+
+def _signal_cancel():
+    """Write cancel signal and kill running codex process."""
+    try:
+        with open(CANCEL_PATH, "w"):
+            pass
+    except OSError:
+        pass
+    try:
+        with open(PID_PATH) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, signal.SIGTERM)
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
+        pass
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -57,6 +75,11 @@ class Handler(BaseHTTPRequestHandler):
             os.close(fd)
         except OSError:
             pass
+
+        # Detect /cancel command and signal cancellation
+        msg = data.get("message") if isinstance(data, dict) else None
+        if isinstance(msg, dict) and (msg.get("text") or "").strip().lower() == "/cancel":
+            _signal_cancel()
 
         self.send_response(200)
         self.end_headers()

@@ -21,6 +21,8 @@ api_base=""
 file_base=""
 poll_fail_count=0
 empty_polls=0
+CANCEL_FILE="$ROOT_DIR/runtime/cancel"
+CODEX_PID_FILE="$ROOT_DIR/runtime/codex.pid"
 
 log_ts() {
   TZ="$TIMEZONE" date +"%Y-%m-%dT%H:%M:%S%z"
@@ -58,7 +60,8 @@ validate_runtime_requirements() {
   fi
 
   ensure_dirs
-  find "$ROOT_DIR/tmp" -maxdepth 1 \( -name "context_*" -o -name "codex_last_*" \) -mmin +30 -delete 2>/dev/null || true
+  find "$ROOT_DIR/tmp" -maxdepth 1 \( -name "context_*" -o -name "codex_last_*" -o -name "codex_pipe_*" -o -name "codex_stdout_*" \) -mmin +30 -delete 2>/dev/null || true
+  rm -f "$CANCEL_FILE" "$CODEX_PID_FILE"
   if [[ ! -f "$SQLITE_DB_PATH" ]]; then
     sqlite3 "$SQLITE_DB_PATH" < "$ROOT_DIR/sql/schema.sql"
   fi
@@ -204,6 +207,50 @@ ${status_text}"
   fi
 }
 
+check_cancel_poll() {
+  local last_id offset resp
+  last_id="$(get_kv "last_update_id" 2>/dev/null)" || true
+  [[ -z "$last_id" ]] && last_id="0"
+  offset=$((last_id + 1))
+
+  resp="$(curl -fsS "$api_base/getUpdates" \
+    -d "offset=$offset" -d "timeout=0" \
+    -d 'allowed_updates=["message"]' 2>/dev/null)" || return 0
+
+  local cancel_uid
+  cancel_uid="$(jq -r --arg cid "$TELEGRAM_CHAT_ID" '
+    [.result[] | select(
+      (.message.chat.id | tostring) == $cid and
+      ((.message.text // "") | test("^/cancel$"; "i"))
+    )] | last | .update_id // empty
+  ' <<< "$resp" 2>/dev/null)" || return 0
+
+  if [[ -n "$cancel_uid" ]]; then
+    log_info "cancel command detected via poll (update_id=$cancel_uid)"
+    touch "$CANCEL_FILE"
+  fi
+}
+
+cancel_watcher() {
+  local codex_pid="$1"
+
+  while kill -0 "$codex_pid" 2>/dev/null; do
+    if [[ -f "$CANCEL_FILE" ]]; then
+      log_info "cancel signal: killing codex pid=$codex_pid"
+      kill -TERM "$codex_pid" 2>/dev/null || true
+      sleep 2
+      if kill -0 "$codex_pid" 2>/dev/null; then
+        kill -KILL "$codex_pid" 2>/dev/null || true
+      fi
+      return 0
+    fi
+    if [[ "$WEBHOOK_MODE" != "on" ]]; then
+      check_cancel_poll
+    fi
+    sleep 2
+  done
+}
+
 append_memory_and_tasks() {
   local codex_output="$1"
   local ts
@@ -329,19 +376,55 @@ run_codex() {
     cmd+=(--model "$CODEX_MODEL")
   fi
 
+  rm -f "$CANCEL_FILE" "$CODEX_PID_FILE"
   local cli_out="" rc=0
 
   if [[ -n "$progress_msg_id" ]]; then
     cmd+=(--json)
+    local pipe="$ROOT_DIR/tmp/codex_pipe_$$.fifo"
+    mkfifo "$pipe"
+
     set +e
-    "${cmd[@]}" < "$context_file" 2>/dev/null | codex_stream_monitor "$progress_msg_id"
-    rc=${PIPESTATUS[0]}
-    set -e
-  else
-    set +e
-    cli_out="$("${cmd[@]}" < "$context_file" 2>&1)"
+    "${cmd[@]}" < "$context_file" > "$pipe" 2>/dev/null &
+    local codex_pid=$!
+    echo "$codex_pid" > "$CODEX_PID_FILE"
+
+    cancel_watcher "$codex_pid" &
+    local watcher_pid=$!
+
+    codex_stream_monitor "$progress_msg_id" < "$pipe"
+    wait "$codex_pid" 2>/dev/null
     rc=$?
     set -e
+
+    kill "$watcher_pid" 2>/dev/null || true
+    wait "$watcher_pid" 2>/dev/null || true
+    rm -f "$pipe"
+  else
+    local tmp_out="$ROOT_DIR/tmp/codex_stdout_$$.txt"
+    set +e
+    "${cmd[@]}" < "$context_file" > "$tmp_out" 2>&1 &
+    local codex_pid=$!
+    echo "$codex_pid" > "$CODEX_PID_FILE"
+
+    cancel_watcher "$codex_pid" &
+    local watcher_pid=$!
+
+    wait "$codex_pid" 2>/dev/null
+    rc=$?
+    set -e
+
+    kill "$watcher_pid" 2>/dev/null || true
+    wait "$watcher_pid" 2>/dev/null || true
+    cli_out="$(cat "$tmp_out" 2>/dev/null || true)"
+    rm -f "$tmp_out"
+  fi
+
+  rm -f "$CODEX_PID_FILE"
+
+  if [[ -f "$CANCEL_FILE" ]]; then
+    rm -f "$CANCEL_FILE" "$out_file"
+    return 130
   fi
 
   local final_msg=""
@@ -401,6 +484,19 @@ handle_user_message() {
   local codex_rc=$?
   set -e
   rm -f "$context_file"
+
+  if [[ $codex_rc -eq 130 ]]; then
+    send_or_edit_text "$progress_msg_id" "❌ Cancelled."
+    store_turn "$ts" "$chat_id" "$input_type" "$user_text" "$asr_text" "" "" "" "cancelled"
+    local cancel_log
+    cancel_log="$(printf "## %s\n- input_type: %s\n- user_text: %s\n- status: cancelled\n" "$ts" "$input_type" "$user_text")"
+    append_daily_log "$cancel_log"
+    if [[ -n "$attachment_path" && -f "$attachment_path" ]]; then
+      rm -f "$attachment_path"
+    fi
+    log_info "request cancelled by user"
+    return 0
+  fi
 
   if [[ $codex_rc -ne 0 ]]; then
     codex_status="codex_error"
@@ -532,6 +628,21 @@ process_update_obj() {
   fi
 
   message_text="$(jq -r '.message.text // .message.caption // empty' <<< "$obj")"
+
+  if [[ "$chat_id" == "$TELEGRAM_CHAT_ID" && "${message_text,,}" =~ ^/cancel$ ]]; then
+    log_info "ack /cancel update_id=$update_id"
+    if [[ -f "$CODEX_PID_FILE" ]]; then
+      touch "$CANCEL_FILE"
+      local cancel_pid
+      cancel_pid="$(cat "$CODEX_PID_FILE" 2>/dev/null)" || true
+      if [[ -n "$cancel_pid" ]] && kill -0 "$cancel_pid" 2>/dev/null; then
+        kill -TERM "$cancel_pid" 2>/dev/null || true
+      fi
+    fi
+    set_kv "last_update_id" "$update_id"
+    return 0
+  fi
+
   voice_file_id="$(jq -r '.message.voice.file_id // empty' <<< "$obj")"
 
   input_type="text"
