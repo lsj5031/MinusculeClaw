@@ -29,7 +29,7 @@ env_value() {
   grep "^${key}=" "$file" | head -n1 | cut -d= -f2- || true
 }
 
-echo "== MinusculeClaw setup =="
+echo "== ShellClaw setup =="
 
 for c in bash curl jq ffmpeg sqlite3; do
   need_cmd "$c"
@@ -165,7 +165,7 @@ chmod +x agent.sh asr.sh tts_to_voice.sh send_telegram.sh heartbeat.sh setup.sh 
 
 cat <<'MSG'
 
-MinusculeClaw setup is complete.
+ShellClaw setup is complete.
 
 Quick smoke test:
   make test
@@ -183,5 +183,5 @@ Useful commands:
 Dashboard:
   ./dashboard.py         # open http://localhost:8080
 
-MinusculeClaw is now purring on Telegram.
+ShellClaw is now purring on Telegram.
 MSG

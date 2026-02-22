@@ -87,9 +87,9 @@ validate_runtime_requirements() {
   api_base="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}"
   file_base="https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}"
   if [[ "$WEBHOOK_MODE" == "on" ]]; then
-    log_info "MinusculeClaw ready (mode=webhook, exec_policy=$EXEC_POLICY)"
+    log_info "ShellClaw ready (mode=webhook, exec_policy=$EXEC_POLICY)"
   else
-    log_info "MinusculeClaw ready (mode=poll, poll_interval=${POLL_INTERVAL_SECONDS}s, exec_policy=$EXEC_POLICY)"
+    log_info "ShellClaw ready (mode=poll, poll_interval=${POLL_INTERVAL_SECONDS}s, exec_policy=$EXEC_POLICY)"
   fi
 }
 
@@ -330,7 +330,7 @@ build_context_file() {
   local attachment_path="${6:-}"
 
   {
-    echo "# MinusculeClaw Runtime Context"
+    echo "# ShellClaw Runtime Context"
     echo ""
     echo "Timestamp: $(iso_now)"
     echo "Input type: $input_type"

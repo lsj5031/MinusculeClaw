@@ -1,5 +1,5 @@
 [Unit]
-Description=MinusculeClaw Cloudflare Tunnel
+Description=ShellClaw Cloudflare Tunnel
 After=network-online.target
 Wants=network-online.target
 

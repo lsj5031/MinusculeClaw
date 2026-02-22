@@ -1,4 +1,4 @@
-# MinusculeClaw 🦀
+# ShellClaw 🦀
 
 **Pure-bash local voice agent that lives in Telegram.**
 
@@ -8,7 +8,7 @@ Send a voice note → local ASR on your laptop → Codex CLI (with real file acc
 
 No servers. No heavy frameworks. No Docker-compose. Maximum privacy and hackability.
 
-<img src="docs/images/minusculeclaw-avatar.jpg" alt="MinusculeClaw project avatar" width="280" />
+<img src="docs/images/shellclaw-avatar.jpg" alt="ShellClaw project avatar" width="280" />
 
 ## ✨ Why people love it
 
@@ -22,17 +22,15 @@ No servers. No heavy frameworks. No Docker-compose. Maximum privacy and hackabil
 - Three safety modes: `strict` | `allowlist` | `yolo`
 - Works great in English and Chinese (and likely more)
 
-## Demo
+## Logo
 
-![Demo: Voice + text conversation with memory, task management, and web search](MinusculeClaw.png)
-
-*Voice notes, memory system explanation, task/memory distinction, web search — all in one conversation.*
+![ShellClaw logo](ShellClaw.png)
 
 ## 🚀 Quick Start
 
 ```bash
-git clone https://github.com/lsj5031/MinusculeClaw.git
-cd MinusculeClaw
+git clone https://github.com/lsj5031/ShellClaw.git
+cd ShellClaw
 
 cp .env.example .env
 # Edit .env → add your TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
@@ -194,7 +192,7 @@ flowchart LR
 
     subgraph Context_File["Context File (tmp/context_*.md)"]
         direction TB
-        HDR["# MinusculeClaw Runtime Context"]
+        HDR["# ShellClaw Runtime Context"]
         META[Timestamp, Input type,<br/>Exec policy, Allowlist]
         SOUL["## SOUL.md<br/>(cat SOUL.md)"]
         USER["## USER.md<br/>(cat USER.md)"]
@@ -328,7 +326,7 @@ flowchart TB
         TG[Telegram App]
     end
 
-    subgraph MinusculeClaw
+    subgraph ShellClaw
         direction TB
         AGENT[agent.sh]
 
@@ -422,7 +420,7 @@ sequenceDiagram
 
 ```mermaid
 mindmap
-  root((MinusculeClaw))
+  root((ShellClaw))
     Core Scripts
       agent.sh
         Webhook loop or poll loop
@@ -536,7 +534,7 @@ Then choose one ASR mode:
 
 And set `TTS_CMD_TEMPLATE` for your TTS command.
 
-MinusculeClaw passes:
+ShellClaw passes:
 - `AUDIO_INPUT` and `AUDIO_INPUT_PREP` to ASR command templates
 - `TEXT` and `WAV_OUTPUT` to TTS command templates
 
@@ -544,7 +542,7 @@ For backend-specific install/runtime flags, use the backend repos above.
 
 ## Codex output contract
 
-MinusculeClaw expects strict markers in Codex output:
+ShellClaw expects strict markers in Codex output:
 - `TELEGRAM_REPLY: ...` (required)
 - `VOICE_REPLY: ...` (optional)
 - `SEND_PHOTO: <absolute path>` (optional)
@@ -553,7 +551,7 @@ MinusculeClaw expects strict markers in Codex output:
 - `MEMORY_APPEND: ...` (optional)
 - `TASK_APPEND: ...` (optional)
 
-If markers are missing, MinusculeClaw sends a safe fallback text reply and logs `parse_fallback`.
+If markers are missing, ShellClaw sends a safe fallback text reply and logs `parse_fallback`.
 
 ## Ingress modes
 
@@ -590,16 +588,16 @@ make test              # smoke test via --inject-text
 
 | Unit | Description |
 |------|-------------|
-| `minusculeclaw.service` | Main agent loop (webhook or poll) |
-| `minusculeclaw-webhook.service` | Webhook HTTP server on `:8787` |
-| `minusculeclaw-tunnel.service` | Cloudflare Tunnel (`cloudflared`) |
-| `minusculeclaw-heartbeat.timer` | Daily heartbeat at 09:00 |
+| `shellclaw.service` | Main agent loop (webhook or poll) |
+| `shellclaw-webhook.service` | Webhook HTTP server on `:8787` |
+| `shellclaw-tunnel.service` | Cloudflare Tunnel (`cloudflared`) |
+| `shellclaw-heartbeat.timer` | Daily heartbeat at 09:00 |
 
 Install all with `make install`, or manually:
 ```bash
-cp systemd/minusculeclaw* ~/.config/systemd/user/
+cp systemd/shellclaw* ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable minusculeclaw.service minusculeclaw-webhook.service minusculeclaw-tunnel.service minusculeclaw-heartbeat.timer
+systemctl --user enable shellclaw.service shellclaw-webhook.service shellclaw-tunnel.service shellclaw-heartbeat.timer
 sudo loginctl enable-linger $USER   # services survive logout & start on boot
 ```
 

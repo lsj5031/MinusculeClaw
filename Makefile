@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-UNITS := minusculeclaw.service minusculeclaw-webhook.service minusculeclaw-tunnel.service minusculeclaw-heartbeat.service minusculeclaw-heartbeat.timer
+UNITS := shellclaw.service shellclaw-webhook.service shellclaw-tunnel.service shellclaw-heartbeat.service shellclaw-heartbeat.timer
 SYSTEMD_DIR := $(HOME)/.config/systemd/user
 
 .PHONY: help install uninstall start stop restart status logs logs-webhook logs-tunnel webhook-register webhook-unregister webhook-status lint test
@@ -11,7 +11,7 @@ help: ## Show this help
 
 install: ## Install systemd units and enable linger
 	mkdir -p $(SYSTEMD_DIR)
-	cp systemd/minusculeclaw*.service systemd/minusculeclaw*.timer $(SYSTEMD_DIR)/
+	cp systemd/shellclaw*.service systemd/shellclaw*.timer $(SYSTEMD_DIR)/
 	systemctl --user daemon-reload
 	systemctl --user enable $(UNITS)
 	loginctl enable-linger $(USER)
@@ -23,14 +23,14 @@ uninstall: stop ## Remove systemd units
 	systemctl --user daemon-reload
 
 start: ## Start all services
-	systemctl --user start minusculeclaw-webhook.service
-	systemctl --user start minusculeclaw-tunnel.service
-	systemctl --user start minusculeclaw.service
-	systemctl --user start minusculeclaw-heartbeat.timer
+	systemctl --user start shellclaw-webhook.service
+	systemctl --user start shellclaw-tunnel.service
+	systemctl --user start shellclaw.service
+	systemctl --user start shellclaw-heartbeat.timer
 	@$(MAKE) --no-print-directory status
 
 stop: ## Stop all services
-	systemctl --user stop minusculeclaw.service minusculeclaw-webhook.service minusculeclaw-tunnel.service minusculeclaw-heartbeat.timer 2>/dev/null || true
+	systemctl --user stop shellclaw.service shellclaw-webhook.service shellclaw-tunnel.service shellclaw-heartbeat.timer 2>/dev/null || true
 
 restart: ## Restart all services
 	$(MAKE) --no-print-directory stop
@@ -43,13 +43,13 @@ status: ## Show service status
 # ── Logs ───────────────────────────────────────────────────────────
 
 logs: ## Follow agent logs
-	journalctl --user -u minusculeclaw.service -f
+	journalctl --user -u shellclaw.service -f
 
 logs-webhook: ## Follow webhook server logs
-	journalctl --user -u minusculeclaw-webhook.service -f
+	journalctl --user -u shellclaw-webhook.service -f
 
 logs-tunnel: ## Follow tunnel logs
-	journalctl --user -u minusculeclaw-tunnel.service -f
+	journalctl --user -u shellclaw-tunnel.service -f
 
 # ── Webhook management ─────────────────────────────────────────────
 

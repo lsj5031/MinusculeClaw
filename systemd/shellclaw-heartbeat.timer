@@ -1,10 +1,10 @@
 [Unit]
-Description=Run MinusculeClaw heartbeat daily
+Description=Run ShellClaw heartbeat daily
 
 [Timer]
 OnCalendar=*-*-* 09:00:00
 Persistent=true
-Unit=minusculeclaw-heartbeat.service
+Unit=shellclaw-heartbeat.service
 
 [Install]
 WantedBy=timers.target

@@ -78,13 +78,13 @@ class Handler(BaseHTTPRequestHandler):
   <head>
     <meta charset=\"utf-8\" />
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-    <title>MinusculeClaw Dashboard</title>
+    <title>ShellClaw Dashboard</title>
     <style>{CSS}</style>
   </head>
   <body>
     <main>
       <div class=\"card\">
-        <h1>MinusculeClaw</h1>
+        <h1>ShellClaw</h1>
         <small>Last 50 turns from SQLite | Rendered at {now}</small>
       </div>
       <div class=\"card\" style=\"margin-top:16px\">
