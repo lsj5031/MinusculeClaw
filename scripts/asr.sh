@@ -27,14 +27,14 @@ tmp_asr_wav=""
 tmp_asr_stderr=""
 if [[ "$ASR_PREPROCESS" == "on" ]]; then
   require_cmd ffmpeg
-  mkdir -p "$ROOT_DIR/tmp"
-  tmp_asr_wav="$ROOT_DIR/tmp/asr_in_$$.wav"
+  mkdir -p "$INSTANCE_DIR/tmp"
+  tmp_asr_wav="$INSTANCE_DIR/tmp/asr_in_$$.wav"
   ffmpeg -hide_banner -loglevel error -y -i "$audio_file" -ac 1 -ar "$ASR_SAMPLE_RATE" "$tmp_asr_wav"
   if [[ -s "$tmp_asr_wav" ]]; then
     asr_input="$tmp_asr_wav"
   fi
 fi
-tmp_asr_stderr="$ROOT_DIR/tmp/asr_cmd_$$.stderr"
+tmp_asr_stderr="$INSTANCE_DIR/tmp/asr_cmd_$$.stderr"
 trap '[[ -n "$tmp_asr_wav" ]] && rm -f "$tmp_asr_wav"; [[ -n "$tmp_asr_stderr" ]] && rm -f "$tmp_asr_stderr"' EXIT
 
 if [[ -n "$(trim "$ASR_CMD_TEMPLATE")" ]]; then

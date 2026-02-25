@@ -77,6 +77,7 @@ scripts/
   nightly_reflection.sh  # Sleep-time reflection trigger + markdown journal append
   webhook_manage.sh      # Register/unregister/status for Telegram webhook
   setup.sh               # Interactive bootstrap/migration script
+  init-instance.sh       # Scaffold a new instance directory (multi-bot)
 services/
   webhook_server.py      # Webhook receiver (secret token, flock, FIFO signal)
   dashboard.py           # Web UI showing last 50 turns
@@ -606,6 +607,26 @@ systemctl --user daemon-reload
 systemctl --user enable shellclaw.service shellclaw-webhook.service shellclaw-tunnel.service shellclaw-heartbeat.timer shellclaw-nightly-reflection.timer
 sudo loginctl enable-linger $USER   # services survive logout & start on boot
 ```
+
+## Multi-bot (running multiple bots from one codebase)
+
+Use `--instance-dir` to run several bots sharing the same code but with separate data, personality, and Telegram tokens:
+
+```bash
+# 1. Scaffold a new instance
+./scripts/init-instance.sh ~/bots/work-bot
+
+# 2. Configure it (different token, chat ID, personality, etc.)
+vim ~/bots/work-bot/.env
+vim ~/bots/work-bot/SOUL.md
+
+# 3. Run it
+./agent.sh --instance-dir ~/bots/work-bot
+```
+
+Each instance directory contains its own `.env`, `SOUL.md`, `USER.md`, `MEMORY.md`, `TASKS/`, `LOGS/`, `state.db`, and `config/` — fully isolated from other instances.
+
+For systemd, add `Environment=INSTANCE_DIR=/path/to/instance` to the unit file (or create a copy of the unit per bot).
 
 ## Dashboard
 

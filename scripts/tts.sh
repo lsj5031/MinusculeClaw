@@ -20,11 +20,11 @@ output_ogg="$2"
 : "${VOICE_BITRATE:=32k}"
 : "${TTS_MAX_CHARS:=260}"
 
-mkdir -p "$(dirname "$output_ogg")" "$ROOT_DIR/tmp"
-tmp_wav="$ROOT_DIR/tmp/tts_$$.wav"
-merged_wav="$ROOT_DIR/tmp/tts_merged_$$.wav"
-chunks_file="$ROOT_DIR/tmp/tts_chunks_$$.txt"
-concat_list="$ROOT_DIR/tmp/tts_concat_$$.txt"
+mkdir -p "$(dirname "$output_ogg")" "$INSTANCE_DIR/tmp"
+tmp_wav="$INSTANCE_DIR/tmp/tts_$$.wav"
+merged_wav="$INSTANCE_DIR/tmp/tts_merged_$$.wav"
+chunks_file="$INSTANCE_DIR/tmp/tts_chunks_$$.txt"
+concat_list="$INSTANCE_DIR/tmp/tts_concat_$$.txt"
 declare -a segment_wavs=()
 cleanup_tts_tmp() {
   rm -f "$tmp_wav" "$merged_wav" "$chunks_file" "$concat_list"
@@ -65,7 +65,7 @@ else
   for chunk in "${chunks[@]}"; do
     chunk="$(trim "$chunk")"
     [[ -z "$chunk" ]] && continue
-    wav_i="$ROOT_DIR/tmp/tts_${$}_$i.wav"
+    wav_i="$INSTANCE_DIR/tmp/tts_${$}_$i.wav"
     run_tts_once "$chunk" "$wav_i"
     if [[ ! -s "$wav_i" ]]; then
       echo "TTS command did not produce wav output: $wav_i" >&2

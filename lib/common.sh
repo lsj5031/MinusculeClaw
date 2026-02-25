@@ -3,8 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# INSTANCE_DIR holds per-bot data (.env, state.db, SOUL.md, MEMORY.md, etc.).
+# Defaults to ROOT_DIR (single-bot backward compat). Override via environment
+# or agent.sh --instance-dir <path>.
+: "${INSTANCE_DIR:=$ROOT_DIR}"
+if [[ "$INSTANCE_DIR" != /* ]]; then
+  INSTANCE_DIR="$(cd "$INSTANCE_DIR" && pwd)"
+fi
+
 load_env() {
-  local env_file="${1:-$ROOT_DIR/.env}"
+  local env_file="${1:-$INSTANCE_DIR/.env}"
   if [[ -f "$env_file" ]]; then
     set -a
     # shellcheck disable=SC1090
@@ -17,13 +25,13 @@ load_env() {
   : "${TIMEZONE:=UTC}"
 
   if [[ "$SQLITE_DB_PATH" != /* ]]; then
-    SQLITE_DB_PATH="$ROOT_DIR/$SQLITE_DB_PATH"
+    SQLITE_DB_PATH="$INSTANCE_DIR/$SQLITE_DB_PATH"
   fi
   if [[ "$LOG_DIR" != /* ]]; then
-    LOG_DIR="$ROOT_DIR/$LOG_DIR"
+    LOG_DIR="$INSTANCE_DIR/$LOG_DIR"
   fi
 
-  export ROOT_DIR SQLITE_DB_PATH LOG_DIR TIMEZONE
+  export ROOT_DIR INSTANCE_DIR SQLITE_DB_PATH LOG_DIR TIMEZONE
 }
 
 require_cmd() {
@@ -44,7 +52,7 @@ today_file() {
 }
 
 ensure_dirs() {
-  mkdir -p "$LOG_DIR" "$ROOT_DIR/TASKS" "$ROOT_DIR/runtime" "$ROOT_DIR/tmp"
+  mkdir -p "$LOG_DIR" "$INSTANCE_DIR/TASKS" "$INSTANCE_DIR/runtime" "$INSTANCE_DIR/tmp"
 }
 
 sql_quote() {

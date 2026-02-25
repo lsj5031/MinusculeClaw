@@ -2,6 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Pre-scan for --instance-dir so INSTANCE_DIR is set before load_env
+for (( _i=1; _i<=$#; _i++ )); do
+  if [[ "${!_i}" == "--instance-dir" ]]; then
+    _j=$((_i + 1)); INSTANCE_DIR="${!_j}"; break
+  fi
+done
+unset _i _j
+
 # shellcheck disable=SC1091
 source "$ROOT_DIR/lib/common.sh"
 load_env
@@ -21,8 +30,8 @@ api_base=""
 file_base=""
 poll_fail_count=0
 empty_polls=0
-CANCEL_FILE="$ROOT_DIR/runtime/cancel"
-CODEX_PID_FILE="$ROOT_DIR/runtime/codex.pid"
+CANCEL_FILE="$INSTANCE_DIR/runtime/cancel"
+CODEX_PID_FILE="$INSTANCE_DIR/runtime/codex.pid"
 
 log_ts() {
   TZ="$TIMEZONE" date +"%Y-%m-%dT%H:%M:%S%z"
@@ -83,11 +92,11 @@ validate_runtime_requirements() {
   fi
 
   if [[ "$ALLOWLIST_PATH" != /* ]]; then
-    ALLOWLIST_PATH="$ROOT_DIR/$ALLOWLIST_PATH"
+    ALLOWLIST_PATH="$INSTANCE_DIR/$ALLOWLIST_PATH"
   fi
 
   ensure_dirs
-  find "$ROOT_DIR/tmp" -maxdepth 1 \( -name "context_*" -o -name "codex_last_*" -o -name "codex_pipe_*" -o -name "codex_stdout_*" \) -mmin +30 -delete 2>/dev/null || true
+  find "$INSTANCE_DIR/tmp" -maxdepth 1 \( -name "context_*" -o -name "codex_last_*" -o -name "codex_pipe_*" -o -name "codex_stdout_*" \) -mmin +30 -delete 2>/dev/null || true
   rm -f "$CANCEL_FILE" "$CODEX_PID_FILE"
   if [[ ! -f "$SQLITE_DB_PATH" ]]; then
     sqlite3 "$SQLITE_DB_PATH" < "$ROOT_DIR/sql/schema.sql"
@@ -128,7 +137,7 @@ safe_send_voice() {
   local text="$1"
   local caption="${2:-}"
   local voice_file
-  voice_file="$ROOT_DIR/tmp/reply_$(date +%s%N).ogg"
+  voice_file="$INSTANCE_DIR/tmp/reply_$(date +%s%N).ogg"
 
   if "$ROOT_DIR/scripts/tts.sh" "$text" "$voice_file" >/dev/null; then
     local -a send_cmd
@@ -305,7 +314,7 @@ append_memory_and_tasks() {
   if [[ -n "$(trim "$memory_lines")" ]]; then
     while IFS= read -r line; do
       [[ -z "$(trim "$line")" ]] && continue
-      printf -- "- %s | %s\n" "$ts" "$line" >> "$ROOT_DIR/MEMORY.md"
+      printf -- "- %s | %s\n" "$ts" "$line" >> "$INSTANCE_DIR/MEMORY.md"
     done <<< "$memory_lines"
   fi
 
@@ -314,7 +323,7 @@ append_memory_and_tasks() {
   if [[ -n "$(trim "$task_lines")" ]]; then
     while IFS= read -r line; do
       [[ -z "$(trim "$line")" ]] && continue
-      ( flock 9; printf -- "- [ ] %s\n" "$line" >> "$ROOT_DIR/TASKS/pending.md" ) 9>"$ROOT_DIR/TASKS/pending.md.lock"
+      ( flock 9; printf -- "- [ ] %s\n" "$line" >> "$INSTANCE_DIR/TASKS/pending.md" ) 9>"$INSTANCE_DIR/TASKS/pending.md.lock"
       sqlite_exec "INSERT INTO tasks(ts, source, content, done) VALUES($(sql_quote "$ts"), $(sql_quote "codex"), $(sql_quote "$line"), 0);"
     done <<< "$task_lines"
   fi
@@ -356,20 +365,20 @@ build_context_file() {
     echo "Allowlist path: $ALLOWLIST_PATH"
     echo ""
     echo "## SOUL.md"
-    cat "$ROOT_DIR/SOUL.md"
+    cat "$INSTANCE_DIR/SOUL.md"
     echo ""
     echo "## USER.md"
-    if [[ -f "$ROOT_DIR/USER.md" ]]; then
-      cat "$ROOT_DIR/USER.md"
+    if [[ -f "$INSTANCE_DIR/USER.md" ]]; then
+      cat "$INSTANCE_DIR/USER.md"
     else
       echo "(missing USER.md)"
     fi
     echo ""
     echo "## MEMORY.md"
-    cat "$ROOT_DIR/MEMORY.md"
+    cat "$INSTANCE_DIR/MEMORY.md"
     echo ""
     echo "## TASKS/pending.md"
-    cat "$ROOT_DIR/TASKS/pending.md"
+    cat "$INSTANCE_DIR/TASKS/pending.md"
     echo ""
     echo "## Recent turns"
     recent_turns_snippet || true
@@ -411,9 +420,9 @@ run_codex() {
   local context_file="$1"
   local progress_msg_id="${2:-}"
   local out_file
-  out_file="$ROOT_DIR/tmp/codex_last_$(date +%s%N).txt"
+  out_file="$INSTANCE_DIR/tmp/codex_last_$(date +%s%N).txt"
   local -a cmd
-  cmd=("$CODEX_BIN" exec --cd "$ROOT_DIR" --skip-git-repo-check --output-last-message "$out_file")
+  cmd=("$CODEX_BIN" exec --cd "$INSTANCE_DIR" --skip-git-repo-check --output-last-message "$out_file")
 
   case "$EXEC_POLICY" in
     yolo)
@@ -439,7 +448,7 @@ run_codex() {
 
   if [[ -n "$progress_msg_id" ]]; then
     cmd+=(--json)
-    local pipe="$ROOT_DIR/tmp/codex_pipe_$$.fifo"
+    local pipe="$INSTANCE_DIR/tmp/codex_pipe_$$.fifo"
     mkfifo "$pipe"
 
     set +e
@@ -459,7 +468,7 @@ run_codex() {
     wait "$watcher_pid" 2>/dev/null || true
     rm -f "$pipe"
   else
-    local tmp_out="$ROOT_DIR/tmp/codex_stdout_$$.txt"
+    local tmp_out="$INSTANCE_DIR/tmp/codex_stdout_$$.txt"
     set +e
     "${cmd[@]}" < "$context_file" > "$tmp_out" 2>&1 &
     local codex_pid=$!
@@ -566,7 +575,7 @@ handle_user_message() {
   ts="$(iso_now)"
   log_info "processing input_type=$input_type chat_id=$chat_id"
   local context_file
-  context_file="$ROOT_DIR/tmp/context_$(date +%s%N).md"
+  context_file="$INSTANCE_DIR/tmp/context_$(date +%s%N).md"
   build_context_file "$input_type" "$user_text" "$asr_text" "$context_file" "$attachment_type" "$attachment_path" "$reply_from" "$reply_text"
 
   local progress_msg_id=""
@@ -806,7 +815,7 @@ process_update_obj() {
 
   if [[ -n "$voice_file_id" ]]; then
     input_type="voice"
-    local voice_in="$ROOT_DIR/tmp/in_${update_id}.oga"
+    local voice_in="$INSTANCE_DIR/tmp/in_${update_id}.oga"
     if download_telegram_file "$voice_file_id" "$voice_in"; then
       set +e
       asr_text="$("$ROOT_DIR/scripts/asr.sh" "$voice_in")"
@@ -835,7 +844,7 @@ process_update_obj() {
 
   if [[ -n "$photo_file_id" ]]; then
     attachment_type="photo"
-    attachment_path="$ROOT_DIR/tmp/photo_${update_id}.jpg"
+    attachment_path="$INSTANCE_DIR/tmp/photo_${update_id}.jpg"
     if ! download_telegram_file "$photo_file_id" "$attachment_path"; then
       log_warn "failed to download photo for update_id=$update_id"
       attachment_type="" attachment_path=""
@@ -845,7 +854,7 @@ process_update_obj() {
   elif [[ -n "$doc_file_id" ]]; then
     attachment_type="document"
     local ext="${doc_file_name##*.}"
-    attachment_path="$ROOT_DIR/tmp/doc_${update_id}.${ext}"
+    attachment_path="$INSTANCE_DIR/tmp/doc_${update_id}.${ext}"
     if ! download_telegram_file "$doc_file_id" "$attachment_path"; then
       log_warn "failed to download document for update_id=$update_id"
       attachment_type="" attachment_path=""
@@ -854,7 +863,7 @@ process_update_obj() {
     fi
   elif [[ -n "$video_file_id" ]]; then
     attachment_type="video"
-    attachment_path="$ROOT_DIR/tmp/video_${update_id}.mp4"
+    attachment_path="$INSTANCE_DIR/tmp/video_${update_id}.mp4"
     if ! download_telegram_file "$video_file_id" "$attachment_path"; then
       log_warn "failed to download video for update_id=$update_id"
       attachment_type="" attachment_path=""
@@ -863,7 +872,7 @@ process_update_obj() {
     fi
   elif [[ -n "$videonote_file_id" ]]; then
     attachment_type="video_note"
-    attachment_path="$ROOT_DIR/tmp/videonote_${update_id}.mp4"
+    attachment_path="$INSTANCE_DIR/tmp/videonote_${update_id}.mp4"
     if ! download_telegram_file "$videonote_file_id" "$attachment_path"; then
       log_warn "failed to download video_note for update_id=$update_id"
       attachment_type="" attachment_path=""
@@ -887,8 +896,8 @@ process_update_obj() {
 }
 
 peek_webhook_queue_line() {
-  local queue_file="$ROOT_DIR/runtime/webhook_updates.jsonl"
-  local lock_file="$ROOT_DIR/runtime/webhook_queue.lock"
+  local queue_file="$INSTANCE_DIR/runtime/webhook_updates.jsonl"
+  local lock_file="$INSTANCE_DIR/runtime/webhook_queue.lock"
   (
     flock -w 2 9
     if [[ ! -s "$queue_file" ]]; then
@@ -900,8 +909,8 @@ peek_webhook_queue_line() {
 
 ack_webhook_queue_line() {
   local expected_update_id="${1:-}"
-  local queue_file="$ROOT_DIR/runtime/webhook_updates.jsonl"
-  local lock_file="$ROOT_DIR/runtime/webhook_queue.lock"
+  local queue_file="$INSTANCE_DIR/runtime/webhook_updates.jsonl"
+  local lock_file="$INSTANCE_DIR/runtime/webhook_queue.lock"
   (
     flock -w 2 9
     if [[ ! -s "$queue_file" ]]; then
@@ -1027,8 +1036,8 @@ drain_webhook_queue() {
 }
 
 webhook_loop() {
-  local queue_file="$ROOT_DIR/runtime/webhook_updates.jsonl"
-  local notify_fifo="$ROOT_DIR/runtime/webhook_notify.fifo"
+  local queue_file="$INSTANCE_DIR/runtime/webhook_updates.jsonl"
+  local notify_fifo="$INSTANCE_DIR/runtime/webhook_notify.fifo"
   touch "$queue_file"
 
   # Create notification FIFO if missing
@@ -1103,7 +1112,10 @@ main_loop() {
 
 usage() {
   cat <<USAGE
-usage: $0 [--once] [--inject-text <text>] [--inject-file <path>] [--chat-id <chat-id>]
+usage: $0 [--instance-dir <path>] [--once] [--inject-text <text>] [--inject-file <path>] [--chat-id <chat-id>]
+
+  --instance-dir <path>   Use a separate data directory (for multi-bot setups).
+                          Scaffold one with: scripts/init-instance.sh <path>
 USAGE
 }
 
@@ -1130,6 +1142,9 @@ while [[ $# -gt 0 ]]; do
       inject_chat_id="$2"
       shift 2
       ;;
+    --instance-dir)
+      shift 2
+      ;;
     --help)
       usage
       exit 0
@@ -1152,7 +1167,7 @@ if [[ -n "$inject_text" || -n "$inject_file" ]]; then
   local_attach_path=""
   local_input_type="text"
   if [[ -n "$inject_file" ]]; then
-    [[ "$inject_file" != /* ]] && inject_file="$ROOT_DIR/$inject_file"
+    [[ "$inject_file" != /* ]] && inject_file="$INSTANCE_DIR/$inject_file"
     if [[ ! -f "$inject_file" ]]; then
       echo "inject file not found: $inject_file" >&2
       exit 1

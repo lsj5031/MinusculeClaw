@@ -14,7 +14,7 @@ ensure_dirs
 : "${NIGHTLY_REFLECTION_PROMPT:=请做一次睡前复盘：结合今天的对话与任务，用第一人称写简短总结，包含“今天成果”“今天体会”“明天最重要一件事”，总长度控制在120字以内。}"
 
 if [[ "$NIGHTLY_REFLECTION_FILE" != /* ]]; then
-  NIGHTLY_REFLECTION_FILE="$ROOT_DIR/$NIGHTLY_REFLECTION_FILE"
+  NIGHTLY_REFLECTION_FILE="$INSTANCE_DIR/$NIGHTLY_REFLECTION_FILE"
 fi
 
 today_local="$(TZ="$TIMEZONE" date +"%Y-%m-%d")"

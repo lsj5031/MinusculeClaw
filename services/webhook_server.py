@@ -7,11 +7,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib import parse, request
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-QUEUE_PATH = os.path.join(ROOT_DIR, "runtime", "webhook_updates.jsonl")
-LOCK_PATH = os.path.join(ROOT_DIR, "runtime", "webhook_queue.lock")
-FIFO_PATH = os.path.join(ROOT_DIR, "runtime", "webhook_notify.fifo")
-CANCEL_PATH = os.path.join(ROOT_DIR, "runtime", "cancel")
-PID_PATH = os.path.join(ROOT_DIR, "runtime", "codex.pid")
+INSTANCE_DIR = os.environ.get("INSTANCE_DIR", ROOT_DIR)
+QUEUE_PATH = os.path.join(INSTANCE_DIR, "runtime", "webhook_updates.jsonl")
+LOCK_PATH = os.path.join(INSTANCE_DIR, "runtime", "webhook_queue.lock")
+FIFO_PATH = os.path.join(INSTANCE_DIR, "runtime", "webhook_notify.fifo")
+CANCEL_PATH = os.path.join(INSTANCE_DIR, "runtime", "cancel")
+PID_PATH = os.path.join(INSTANCE_DIR, "runtime", "codex.pid")
 BIND = os.environ.get("WEBHOOK_BIND", "127.0.0.1:8787")
 HOST, PORT = BIND.rsplit(":", 1)
 PORT = int(PORT)

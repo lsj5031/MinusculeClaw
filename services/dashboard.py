@@ -6,9 +6,10 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.environ.get("SQLITE_DB_PATH", os.path.join(ROOT_DIR, "state.db"))
+INSTANCE_DIR = os.environ.get("INSTANCE_DIR", ROOT_DIR)
+DB_PATH = os.environ.get("SQLITE_DB_PATH", os.path.join(INSTANCE_DIR, "state.db"))
 if not os.path.isabs(DB_PATH):
-    DB_PATH = os.path.join(ROOT_DIR, DB_PATH)
+    DB_PATH = os.path.join(INSTANCE_DIR, DB_PATH)
 
 HOST = "0.0.0.0"
 PORT = 8080
