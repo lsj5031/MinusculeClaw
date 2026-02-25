@@ -443,6 +443,10 @@ run_codex() {
     cmd+=(--model "$CODEX_MODEL")
   fi
 
+  if [[ -n "${CODEX_REASONING_EFFORT:-}" ]]; then
+    cmd+=(-c "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"")
+  fi
+
   rm -f "$CANCEL_FILE" "$CODEX_PID_FILE"
   local cli_out="" rc=0
 
