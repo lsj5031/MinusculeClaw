@@ -20,6 +20,12 @@ require_cmd jq
 require_cmd sqlite3
 
 : "${CODEX_BIN:=codex}"
+: "${AGENT_PROVIDER:=codex}"
+: "${PI_BIN:=pi}"
+: "${PI_PROVIDER:=}"
+: "${PI_MODEL:=}"
+: "${PI_MODE:=text}"
+: "${PI_EXTRA_ARGS:=}"
 : "${EXEC_POLICY:=yolo}"
 : "${POLL_INTERVAL_SECONDS:=2}"
 : "${WEBHOOK_MODE:=off}"
@@ -31,7 +37,8 @@ file_base=""
 poll_fail_count=0
 empty_polls=0
 CANCEL_FILE="$INSTANCE_DIR/runtime/cancel"
-CODEX_PID_FILE="$INSTANCE_DIR/runtime/codex.pid"
+AGENT_PID_FILE="$INSTANCE_DIR/runtime/agent.pid"
+LEGACY_CODEX_PID_FILE="$INSTANCE_DIR/runtime/codex.pid"
 
 log_ts() {
   TZ="$TIMEZONE" date +"%Y-%m-%dT%H:%M:%S%z"
@@ -86,18 +93,46 @@ validate_runtime_requirements() {
     exit 1
   fi
 
-  if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
-    echo "missing Codex CLI binary: $CODEX_BIN" >&2
-    exit 1
-  fi
+  AGENT_PROVIDER="${AGENT_PROVIDER,,}"
+  PI_MODE="${PI_MODE,,}"
+
+  case "$AGENT_PROVIDER" in
+    codex)
+      if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
+        echo "missing Codex CLI binary: $CODEX_BIN" >&2
+        exit 1
+      fi
+      ;;
+    pi)
+      if ! command -v "$PI_BIN" >/dev/null 2>&1; then
+        echo "missing pi CLI binary: $PI_BIN" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "invalid AGENT_PROVIDER: $AGENT_PROVIDER (expected codex or pi)" >&2
+      exit 1
+      ;;
+  esac
 
   if [[ "$ALLOWLIST_PATH" != /* ]]; then
     ALLOWLIST_PATH="$INSTANCE_DIR/$ALLOWLIST_PATH"
   fi
 
+  if [[ "$AGENT_PROVIDER" == "pi" ]]; then
+    if [[ "$PI_MODE" != "text" && "$PI_MODE" != "json" ]]; then
+      echo "invalid PI_MODE: $PI_MODE (expected text or json)" >&2
+      exit 1
+    fi
+    if [[ -n "${CODEX_MODEL:-}" || -n "${CODEX_REASONING_EFFORT:-}" ]]; then
+      log_warn "CODEX_MODEL/CODEX_REASONING_EFFORT are ignored when AGENT_PROVIDER=pi"
+    fi
+    log_warn "EXEC_POLICY/ALLOWLIST_PATH are codex-only and not applied to AGENT_PROVIDER=pi"
+  fi
+
   ensure_dirs
-  find "$INSTANCE_DIR/tmp" -maxdepth 1 \( -name "context_*" -o -name "codex_last_*" -o -name "codex_pipe_*" -o -name "codex_stdout_*" \) -mmin +30 -delete 2>/dev/null || true
-  rm -f "$CANCEL_FILE" "$CODEX_PID_FILE"
+  find "$INSTANCE_DIR/tmp" -maxdepth 1 \( -name "context_*" -o -name "codex_last_*" -o -name "codex_pipe_*" -o -name "codex_stdout_*" -o -name "pi_pipe_*" -o -name "pi_stdout_*" -o -name "pi_stream_*" \) -mmin +30 -delete 2>/dev/null || true
+  rm -f "$CANCEL_FILE" "$AGENT_PID_FILE" "$LEGACY_CODEX_PID_FILE"
   if [[ ! -f "$SQLITE_DB_PATH" ]]; then
     sqlite3 "$SQLITE_DB_PATH" < "$ROOT_DIR/sql/schema.sql"
   fi
@@ -107,9 +142,9 @@ validate_runtime_requirements() {
   file_base="https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}"
   register_bot_commands
   if [[ "$WEBHOOK_MODE" == "on" ]]; then
-    log_info "ShellClaw ready (mode=webhook, exec_policy=$EXEC_POLICY)"
+    log_info "ShellClaw ready (mode=webhook, provider=$AGENT_PROVIDER, exec_policy=$EXEC_POLICY)"
   else
-    log_info "ShellClaw ready (mode=poll, poll_interval=${POLL_INTERVAL_SECONDS}s, exec_policy=$EXEC_POLICY)"
+    log_info "ShellClaw ready (mode=poll, poll_interval=${POLL_INTERVAL_SECONDS}s, provider=$AGENT_PROVIDER, exec_policy=$EXEC_POLICY)"
   fi
 }
 
@@ -284,17 +319,40 @@ check_cancel_poll() {
   fi
 }
 
-cancel_watcher() {
-  local codex_pid="$1"
+terminate_agent_process() {
+  local provider="$1"
+  local agent_pid="$2"
 
-  while kill -0 "$codex_pid" 2>/dev/null; do
-    if [[ -f "$CANCEL_FILE" ]]; then
-      log_info "cancel signal: killing codex pid=$codex_pid"
-      kill -TERM "$codex_pid" 2>/dev/null || true
+  case "$provider" in
+    pi)
+      kill -INT "$agent_pid" 2>/dev/null || true
       sleep 2
-      if kill -0 "$codex_pid" 2>/dev/null; then
-        kill -KILL "$codex_pid" 2>/dev/null || true
+      if kill -0 "$agent_pid" 2>/dev/null; then
+        kill -TERM "$agent_pid" 2>/dev/null || true
       fi
+      sleep 2
+      if kill -0 "$agent_pid" 2>/dev/null; then
+        kill -KILL "$agent_pid" 2>/dev/null || true
+      fi
+      ;;
+    *)
+      kill -TERM "$agent_pid" 2>/dev/null || true
+      sleep 2
+      if kill -0 "$agent_pid" 2>/dev/null; then
+        kill -KILL "$agent_pid" 2>/dev/null || true
+      fi
+      ;;
+  esac
+}
+
+cancel_watcher() {
+  local provider="$1"
+  local agent_pid="$2"
+
+  while kill -0 "$agent_pid" 2>/dev/null; do
+    if [[ -f "$CANCEL_FILE" ]]; then
+      log_info "cancel signal: stopping provider=$provider pid=$agent_pid"
+      terminate_agent_process "$provider" "$agent_pid"
       return 0
     fi
     if [[ "$WEBHOOK_MODE" != "on" ]]; then
@@ -305,12 +363,12 @@ cancel_watcher() {
 }
 
 append_memory_and_tasks() {
-  local codex_output="$1"
+  local agent_output="$1"
   local ts
   ts="$(iso_now)"
 
   local memory_lines
-  memory_lines="$(extract_all_markers "MEMORY_APPEND" "$codex_output" || true)"
+  memory_lines="$(extract_all_markers "MEMORY_APPEND" "$agent_output" || true)"
   if [[ -n "$(trim "$memory_lines")" ]]; then
     while IFS= read -r line; do
       [[ -z "$(trim "$line")" ]] && continue
@@ -319,12 +377,12 @@ append_memory_and_tasks() {
   fi
 
   local task_lines
-  task_lines="$(extract_all_markers "TASK_APPEND" "$codex_output" || true)"
+  task_lines="$(extract_all_markers "TASK_APPEND" "$agent_output" || true)"
   if [[ -n "$(trim "$task_lines")" ]]; then
     while IFS= read -r line; do
       [[ -z "$(trim "$line")" ]] && continue
       ( flock 9; printf -- "- [ ] %s\n" "$line" >> "$INSTANCE_DIR/TASKS/pending.md" ) 9>"$INSTANCE_DIR/TASKS/pending.md.lock"
-      sqlite_exec "INSERT INTO tasks(ts, source, content, done) VALUES($(sql_quote "$ts"), $(sql_quote "codex"), $(sql_quote "$line"), 0);"
+      sqlite_exec "INSERT INTO tasks(ts, source, content, done) VALUES($(sql_quote "$ts"), $(sql_quote "$AGENT_PROVIDER"), $(sql_quote "$line"), 0);"
     done <<< "$task_lines"
   fi
 }
@@ -361,6 +419,7 @@ build_context_file() {
     echo ""
     echo "Timestamp: $(iso_now)"
     echo "Input type: $input_type"
+    echo "Agent provider: $AGENT_PROVIDER"
     echo "Exec policy: $EXEC_POLICY"
     echo "Allowlist path: $ALLOWLIST_PATH"
     echo ""
@@ -447,7 +506,7 @@ run_codex() {
     cmd+=(-c "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"")
   fi
 
-  rm -f "$CANCEL_FILE" "$CODEX_PID_FILE"
+  rm -f "$CANCEL_FILE" "$AGENT_PID_FILE" "$LEGACY_CODEX_PID_FILE"
   local cli_out="" rc=0
 
   if [[ -n "$progress_msg_id" ]]; then
@@ -458,9 +517,9 @@ run_codex() {
     set +e
     "${cmd[@]}" < "$context_file" > "$pipe" 2>/dev/null &
     local codex_pid=$!
-    echo "$codex_pid" > "$CODEX_PID_FILE"
+    echo "$codex_pid" > "$AGENT_PID_FILE"
 
-    cancel_watcher "$codex_pid" &
+    cancel_watcher "codex" "$codex_pid" &
     local watcher_pid=$!
 
     codex_stream_monitor "$progress_msg_id" < "$pipe"
@@ -476,9 +535,9 @@ run_codex() {
     set +e
     "${cmd[@]}" < "$context_file" > "$tmp_out" 2>&1 &
     local codex_pid=$!
-    echo "$codex_pid" > "$CODEX_PID_FILE"
+    echo "$codex_pid" > "$AGENT_PID_FILE"
 
-    cancel_watcher "$codex_pid" &
+    cancel_watcher "codex" "$codex_pid" &
     local watcher_pid=$!
 
     wait "$codex_pid" 2>/dev/null
@@ -491,7 +550,7 @@ run_codex() {
     rm -f "$tmp_out"
   fi
 
-  rm -f "$CODEX_PID_FILE"
+  rm -f "$AGENT_PID_FILE"
 
   if [[ -f "$CANCEL_FILE" ]]; then
     rm -f "$CANCEL_FILE" "$out_file"
@@ -513,6 +572,222 @@ run_codex() {
     printf "%s\n" "$cli_out"
   fi
   return $rc
+}
+
+pi_stream_monitor() {
+  local msg_id="$1"
+  local last_edit_ts=0
+  local status_log=""
+  while IFS= read -r line; do
+    local etype status_text=""
+    etype="$(jq -r '.type // empty' <<< "$line" 2>/dev/null)" || continue
+    case "$etype" in
+      turn_start|agent_start|message_start)
+        status_text="⚡ Processing…"
+        ;;
+      message_update)
+        local update_type tool_name
+        update_type="$(jq -r '.assistantMessageEvent.type // empty' <<< "$line" 2>/dev/null)"
+        case "$update_type" in
+          thinking_start|thinking_delta)
+            status_text="🤔 Reasoning…"
+            ;;
+          text_delta)
+            status_text="✍️ Drafting…"
+            ;;
+          toolcall_start|toolcall_delta)
+            tool_name="$(jq -r '.assistantMessageEvent.toolCall.name // empty' <<< "$line" 2>/dev/null)"
+            if [[ -z "$tool_name" ]]; then
+              tool_name="$(jq -r '.assistantMessageEvent.partial.content[]? | select(.type=="toolCall") | .name' <<< "$line" 2>/dev/null | tail -n 1)"
+            fi
+            if [[ -n "$tool_name" ]]; then
+              status_text="🔧 ${tool_name:0:120}"
+            else
+              status_text="🔧 Working…"
+            fi
+            ;;
+        esac
+        ;;
+      tool_execution_start)
+        local tool_name
+        tool_name="$(jq -r '.toolName // empty' <<< "$line" 2>/dev/null)"
+        if [[ -n "$tool_name" ]]; then
+          status_text="🔧 ${tool_name:0:120}"
+        else
+          status_text="🔧 Running tool…"
+        fi
+        ;;
+      auto_retry_start)
+        status_text="🔁 Retrying…"
+        ;;
+    esac
+    if [[ -n "$status_text" ]]; then
+      if [[ -n "$status_log" ]]; then
+        status_log="${status_log}
+${status_text}"
+      else
+        status_log="$status_text"
+      fi
+      local now
+      now="$(date +%s)"
+      if (( now - last_edit_ts >= 3 )); then
+        local edit_text="$status_log"
+        if (( ${#edit_text} > 4000 )); then
+          edit_text="…${edit_text: -3900}"
+        fi
+        "$ROOT_DIR/scripts/telegram_api.sh" --edit "$msg_id" --text "$edit_text" --with-cancel-btn 2>/dev/null || true
+        "$ROOT_DIR/scripts/telegram_api.sh" --typing 2>/dev/null || true
+        last_edit_ts=$now
+      fi
+    fi
+  done
+  if [[ -n "$status_log" ]]; then
+    local edit_text="$status_log"
+    if (( ${#edit_text} > 4000 )); then
+      edit_text="…${edit_text: -3900}"
+    fi
+    "$ROOT_DIR/scripts/telegram_api.sh" --edit "$msg_id" --text "$edit_text" 2>/dev/null || true
+  fi
+}
+
+pi_extract_final_from_json() {
+  local payload="$1"
+  local encoded
+  encoded="$(
+    printf '%s\n' "$payload" | jq -r '
+      if .type == "message_end" and (.message.role // "") == "assistant" then
+        [.message.content[]? | select(.type == "text") | .text] | join("\n")
+      elif .type == "message_update" and (.assistantMessageEvent.type // "") == "done" then
+        [.assistantMessageEvent.message.content[]? | select(.type == "text") | .text] | join("\n")
+      elif .type == "agent_end" then
+        [
+          .messages[]?
+          | select(.role == "assistant")
+          | .content[]?
+          | select(.type == "text")
+          | .text
+        ] | join("\n")
+      else
+        empty
+      end
+      | select(length > 0)
+      | @base64
+    ' 2>/dev/null | tail -n 1 || true
+  )"
+  if [[ -n "$encoded" ]]; then
+    printf '%s' "$encoded" | base64 --decode 2>/dev/null || true
+  fi
+}
+
+run_pi() {
+  local context_file="$1"
+  local progress_msg_id="${2:-}"
+  local pi_mode="${PI_MODE,,}"
+  local prompt
+  prompt="$(cat "$context_file")"
+
+  local -a cmd extra_args
+  cmd=("$PI_BIN" -p --mode "$pi_mode")
+
+  if [[ -n "${PI_PROVIDER:-}" ]]; then
+    cmd+=(--provider "$PI_PROVIDER")
+  fi
+
+  if [[ -n "${PI_MODEL:-}" ]]; then
+    cmd+=(--model "$PI_MODEL")
+  fi
+
+  if [[ -n "$(trim "${PI_EXTRA_ARGS:-}")" ]]; then
+    # shellcheck disable=SC2206
+    extra_args=($PI_EXTRA_ARGS)
+    cmd+=("${extra_args[@]}")
+  fi
+
+  cmd+=("$prompt")
+
+  rm -f "$CANCEL_FILE" "$AGENT_PID_FILE" "$LEGACY_CODEX_PID_FILE"
+  local cli_out="" rc=0
+
+  if [[ -n "$progress_msg_id" && "$pi_mode" == "json" ]]; then
+    local pipe="$INSTANCE_DIR/tmp/pi_pipe_$$.fifo"
+    local tmp_stream="$INSTANCE_DIR/tmp/pi_stream_$$.txt"
+    mkfifo "$pipe"
+
+    set +e
+    "${cmd[@]}" > "$pipe" 2>/dev/null &
+    local pi_pid=$!
+    echo "$pi_pid" > "$AGENT_PID_FILE"
+
+    cancel_watcher "pi" "$pi_pid" &
+    local watcher_pid=$!
+
+    tee "$tmp_stream" < "$pipe" | pi_stream_monitor "$progress_msg_id"
+    wait "$pi_pid" 2>/dev/null
+    rc=$?
+    set -e
+
+    kill "$watcher_pid" 2>/dev/null || true
+    wait "$watcher_pid" 2>/dev/null || true
+    cli_out="$(cat "$tmp_stream" 2>/dev/null || true)"
+    rm -f "$pipe" "$tmp_stream"
+  else
+    local tmp_out="$INSTANCE_DIR/tmp/pi_stdout_$$.txt"
+    set +e
+    "${cmd[@]}" > "$tmp_out" 2>&1 &
+    local pi_pid=$!
+    echo "$pi_pid" > "$AGENT_PID_FILE"
+
+    cancel_watcher "pi" "$pi_pid" &
+    local watcher_pid=$!
+
+    wait "$pi_pid" 2>/dev/null
+    rc=$?
+    set -e
+
+    kill "$watcher_pid" 2>/dev/null || true
+    wait "$watcher_pid" 2>/dev/null || true
+    cli_out="$(cat "$tmp_out" 2>/dev/null || true)"
+    rm -f "$tmp_out"
+  fi
+
+  rm -f "$AGENT_PID_FILE"
+
+  if [[ -f "$CANCEL_FILE" ]]; then
+    rm -f "$CANCEL_FILE"
+    return 130
+  fi
+
+  if [[ $rc -eq 0 && "$pi_mode" == "json" ]]; then
+    local final_msg
+    final_msg="$(pi_extract_final_from_json "$cli_out")"
+    if [[ -n "$(trim "$final_msg")" ]]; then
+      printf "%s\n" "$final_msg"
+      return 0
+    fi
+  fi
+
+  if [[ -n "$(trim "$cli_out")" ]]; then
+    printf "%s\n" "$cli_out"
+  fi
+  return $rc
+}
+
+run_agent() {
+  local context_file="$1"
+  local progress_msg_id="${2:-}"
+
+  case "$AGENT_PROVIDER" in
+    codex)
+      run_codex "$context_file" "$progress_msg_id"
+      ;;
+    pi)
+      run_pi "$context_file" "$progress_msg_id"
+      ;;
+    *)
+      echo "invalid AGENT_PROVIDER: $AGENT_PROVIDER" >&2
+      return 2
+      ;;
+  esac
 }
 
 turn_exists_for_update_id() {
@@ -586,15 +861,15 @@ handle_user_message() {
   progress_msg_id="$("$ROOT_DIR/scripts/telegram_api.sh" --text "⏳ Thinking…" --return-id --with-cancel-btn 2>/dev/null)" || true
   "$ROOT_DIR/scripts/telegram_api.sh" --typing 2>/dev/null || true
 
-  local codex_output=""
-  local codex_status="ok"
+  local agent_output=""
+  local agent_status="ok"
   set +e
-  codex_output="$(run_codex "$context_file" "$progress_msg_id" 2>&1)"
-  local codex_rc=$?
+  agent_output="$(run_agent "$context_file" "$progress_msg_id" 2>&1)"
+  local agent_rc=$?
   set -e
   rm -f "$context_file"
 
-  if [[ $codex_rc -eq 130 ]]; then
+  if [[ $agent_rc -eq 130 ]]; then
     send_or_edit_text "$progress_msg_id" "❌ Cancelled."
     local cancel_inserted
     cancel_inserted="$(store_turn "$ts" "$chat_id" "$input_type" "$user_text" "$asr_text" "" "" "" "cancelled" "$update_id")"
@@ -611,26 +886,26 @@ handle_user_message() {
     return 0
   fi
 
-  if [[ $codex_rc -ne 0 ]]; then
-    codex_status="codex_error"
+  if [[ $agent_rc -ne 0 ]]; then
+    agent_status="agent_error"
   fi
 
   local telegram_reply voice_reply
-  telegram_reply="$(extract_marker "TELEGRAM_REPLY" "$codex_output" || true)"
-  voice_reply="$(extract_marker "VOICE_REPLY" "$codex_output" || true)"
+  telegram_reply="$(extract_marker "TELEGRAM_REPLY" "$agent_output" || true)"
+  voice_reply="$(extract_marker "VOICE_REPLY" "$agent_output" || true)"
 
   telegram_reply="$(trim "$telegram_reply")"
   voice_reply="$(trim "$voice_reply")"
 
   if [[ -z "$telegram_reply" && -z "$voice_reply" ]]; then
-    if [[ $codex_rc -ne 0 ]]; then
+    if [[ $agent_rc -ne 0 ]]; then
       local err_line
-      err_line="$(printf '%s\n' "$codex_output" | head -n 1)"
-      telegram_reply="Codex execution failed locally. ${err_line:-Please check local logs and retry.}"
-      codex_status="codex_error"
+      err_line="$(printf '%s\n' "$agent_output" | head -n 1)"
+      telegram_reply="Agent execution failed locally. ${err_line:-Please check local logs and retry.}"
+      agent_status="agent_error"
     else
       telegram_reply="I hit a parser issue on my side. Please resend that in text while I recover."
-      codex_status="parse_fallback"
+      agent_status="parse_fallback"
     fi
   fi
 
@@ -660,12 +935,12 @@ handle_user_message() {
     fi
   fi
 
-  # Send file attachments requested by Codex
+  # Send file attachments requested by the provider output markers
   local send_files_marker
   for marker_pair in "SEND_PHOTO:photo" "SEND_DOCUMENT:document" "SEND_VIDEO:video"; do
     local m_name="${marker_pair%%:*}"
     local m_mode="${marker_pair##*:}"
-    send_files_marker="$(extract_all_markers "$m_name" "$codex_output" || true)"
+    send_files_marker="$(extract_all_markers "$m_name" "$agent_output" || true)"
     if [[ -n "$(trim "$send_files_marker")" ]]; then
       while IFS= read -r fpath; do
         fpath="$(trim "$fpath")"
@@ -680,15 +955,15 @@ handle_user_message() {
   done
 
   local turn_inserted
-  turn_inserted="$(store_turn "$ts" "$chat_id" "$input_type" "$user_text" "$asr_text" "$codex_output" "$telegram_reply" "$voice_reply" "$codex_status" "$update_id")"
+  turn_inserted="$(store_turn "$ts" "$chat_id" "$input_type" "$user_text" "$asr_text" "$agent_output" "$telegram_reply" "$voice_reply" "$agent_status" "$update_id")"
   if [[ "$turn_inserted" != "1" ]]; then
     log_info "dedup skip for completed update_id=$update_id"
     cleanup_attachment_path "$attachment_path" "$attachment_owned"
     return 0
   fi
 
-  append_memory_and_tasks "$codex_output"
-  log_info "reply complete status=$codex_status"
+  append_memory_and_tasks "$agent_output"
+  log_info "reply complete status=$agent_status"
 
   cleanup_attachment_path "$attachment_path" "$attachment_owned"
 
@@ -705,7 +980,7 @@ handle_user_message() {
     fi
     echo "- telegram_reply: ${telegram_reply:-<none>}"
     echo "- voice_reply: ${voice_reply:-<none>}"
-    echo "- status: $codex_status"
+    echo "- status: $agent_status"
     echo ""
   })"
   append_daily_log "$log_block"
@@ -793,12 +1068,12 @@ process_update_obj() {
 
   if [[ "$chat_id" == "$TELEGRAM_CHAT_ID" && "${message_text,,}" =~ ^/cancel$ ]]; then
     log_info "ack /cancel update_id=$update_id"
-    if [[ -f "$CODEX_PID_FILE" ]]; then
+    if [[ -f "$AGENT_PID_FILE" ]]; then
       touch "$CANCEL_FILE"
       local cancel_pid
-      cancel_pid="$(cat "$CODEX_PID_FILE" 2>/dev/null)" || true
+      cancel_pid="$(cat "$AGENT_PID_FILE" 2>/dev/null)" || true
       if [[ -n "$cancel_pid" ]] && kill -0 "$cancel_pid" 2>/dev/null; then
-        kill -TERM "$cancel_pid" 2>/dev/null || true
+        terminate_agent_process "$AGENT_PROVIDER" "$cancel_pid"
       fi
     fi
     set_kv "last_update_id" "$update_id"
