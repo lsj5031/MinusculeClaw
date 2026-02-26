@@ -695,8 +695,6 @@ run_pi() {
   local context_file="$1"
   local progress_msg_id="${2:-}"
   local pi_mode="${PI_MODE,,}"
-  local prompt
-  prompt="$(cat "$context_file")"
 
   local -a cmd extra_args
   cmd=("$PI_BIN" -p --mode "$pi_mode")
@@ -715,8 +713,6 @@ run_pi() {
     cmd+=("${extra_args[@]}")
   fi
 
-  cmd+=("$prompt")
-
   rm -f "$CANCEL_FILE" "$AGENT_PID_FILE" "$LEGACY_CODEX_PID_FILE"
   local cli_out="" rc=0
 
@@ -726,7 +722,7 @@ run_pi() {
     mkfifo "$pipe"
 
     set +e
-    "${cmd[@]}" > "$pipe" 2>/dev/null &
+    "${cmd[@]}" < "$context_file" > "$pipe" 2>/dev/null &
     local pi_pid=$!
     echo "$pi_pid" > "$AGENT_PID_FILE"
 
@@ -745,7 +741,7 @@ run_pi() {
   else
     local tmp_out="$INSTANCE_DIR/tmp/pi_stdout_$$.txt"
     set +e
-    "${cmd[@]}" > "$tmp_out" 2>&1 &
+    "${cmd[@]}" < "$context_file" > "$tmp_out" 2>&1 &
     local pi_pid=$!
     echo "$pi_pid" > "$AGENT_PID_FILE"
 
