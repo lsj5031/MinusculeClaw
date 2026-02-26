@@ -471,7 +471,19 @@ build_context_file() {
     echo "SEND_VIDEO: <absolute file path>"
     echo "MEMORY_APPEND: <single memory line>"
     echo "TASK_APPEND: <single task line>"
-    echo "Do not use markdown, code fences, or extra prefixes."
+    case "${TELEGRAM_PARSE_MODE:-off}" in
+      Markdown | MarkdownV2)
+        echo "Use valid ${TELEGRAM_PARSE_MODE} formatting in TELEGRAM_REPLY when useful."
+        echo "Do not use code fences or extra prefixes."
+        ;;
+      HTML)
+        echo "Use valid Telegram HTML formatting in TELEGRAM_REPLY when useful."
+        echo "Do not use markdown, code fences, or extra prefixes."
+        ;;
+      *)
+        echo "Do not use markdown, code fences, or extra prefixes."
+        ;;
+    esac
   } > "$context_file"
 }
 

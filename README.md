@@ -561,6 +561,11 @@ Copy `.env.example` to `.env`, then set at minimum:
 - `TELEGRAM_CHAT_ID`
 - `CODEX_BIN` (if `codex` is not in systemd/user PATH)
 
+Optional Telegram rendering:
+- `TELEGRAM_PARSE_MODE=off|Markdown|MarkdownV2|HTML` (default `off`)
+- When enabled, agent output instructions allow matching formatted replies in `TELEGRAM_REPLY`.
+- If parse mode causes invalid entity errors, ShellClaw auto-retries without parse mode for that message.
+
 Then choose one ASR mode:
 - `ASR_URL` for HTTP ASR service
 - or `ASR_CMD_TEMPLATE` for CLI-based ASR
@@ -619,6 +624,7 @@ make webhook-register  # register Telegram webhook
 make webhook-status    # check webhook info
 make lint              # shellcheck all scripts
 make test              # smoke test via --inject-text
+make test-telegram-api # Telegram parse-mode tests (offline/mocked)
 ```
 
 ## systemd services

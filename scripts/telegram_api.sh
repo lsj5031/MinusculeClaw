@@ -86,6 +86,95 @@ done
 api_base="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}"
 
 cancel_keyboard='{"inline_keyboard":[[{"text":"Cancel","callback_data":"cancel"}]]}'
+telegram_parse_mode="${TELEGRAM_PARSE_MODE:-}"
+parse_mode_args=()
+
+case "$telegram_parse_mode" in
+  "" | off | OFF)
+    telegram_parse_mode=""
+    ;;
+  Markdown | MarkdownV2 | HTML)
+    parse_mode_args=(-d "parse_mode=$telegram_parse_mode")
+    ;;
+  *)
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "unsupported TELEGRAM_PARSE_MODE='$telegram_parse_mode'; expected Markdown, MarkdownV2, HTML, or off"
+    else
+      echo "WARN: unsupported TELEGRAM_PARSE_MODE='$telegram_parse_mode'; expected Markdown, MarkdownV2, HTML, or off" >&2
+    fi
+    telegram_parse_mode=""
+    ;;
+esac
+
+escape_markdownv2_text() {
+  local text="$1"
+  text="${text//\\/\\\\}"
+  text="${text//_/\\_}"
+  text="${text//\*/\\*}"
+  text="${text//[/\\[}"
+  text="${text//]/\\]}"
+  text="${text//(/\\(}"
+  text="${text//)/\\)}"
+  text="${text//~/\\~}"
+  text="${text//\`/\\\`}"
+  text="${text//>/\\>}"
+  text="${text//#/\\#}"
+  text="${text//+/\\+}"
+  text="${text//-/\\-}"
+  text="${text//=/\\=}"
+  text="${text//|/\\|}"
+  text="${text//\{/\\{}"
+  text="${text//\}/\\}}"
+  text="${text//./\\.}"
+  text="${text//!/\\!}"
+  printf '%s' "$text"
+}
+
+telegram_text_request() {
+  local -a raw_request=("$@")
+  local -a raw_cmd=(curl -fsS "${raw_request[@]}")
+
+  if [[ ${#parse_mode_args[@]} -eq 0 ]]; then
+    "${raw_cmd[@]}"
+    return 0
+  fi
+
+  local -a parse_raw_cmd=(curl -fsS "${raw_request[@]}")
+  if "${parse_raw_cmd[@]}" "${parse_mode_args[@]}"; then
+    return 0
+  fi
+
+  if [[ "$telegram_parse_mode" == "MarkdownV2" ]]; then
+    local -a escaped_request=()
+    local idx=0
+    while [[ $idx -lt ${#raw_request[@]} ]]; do
+      if [[ "${raw_request[$idx]}" == "--data-urlencode" ]] \
+        && [[ $((idx + 1)) -lt ${#raw_request[@]} ]] \
+        && [[ "${raw_request[$((idx + 1))]}" == text=* ]]; then
+        local raw_text="${raw_request[$((idx + 1))]#text=}"
+        local escaped_text
+        escaped_text="$(escape_markdownv2_text "$raw_text")"
+        escaped_request+=("--data-urlencode" "text=$escaped_text")
+        idx=$((idx + 2))
+        continue
+      fi
+      escaped_request+=("${raw_request[$idx]}")
+      idx=$((idx + 1))
+    done
+
+    local -a parse_escaped_cmd=(curl -fsS "${escaped_request[@]}")
+    if "${parse_escaped_cmd[@]}" "${parse_mode_args[@]}"; then
+      return 0
+    fi
+  fi
+
+  if declare -F log_warn >/dev/null 2>&1; then
+    log_warn "text request failed with TELEGRAM_PARSE_MODE=$telegram_parse_mode; retrying without parse mode"
+  else
+    echo "WARN: text request failed with TELEGRAM_PARSE_MODE=$telegram_parse_mode; retrying without parse mode" >&2
+  fi
+  "${raw_cmd[@]}"
+}
 
 send_file() {
   local method="$1"
@@ -107,14 +196,14 @@ case "$mode" in
   text)
     if [[ -n "$edit_msg_id" ]]; then
       if [[ -n "$with_cancel_btn" ]]; then
-        curl -fsS "$api_base/editMessageText" \
+        telegram_text_request "$api_base/editMessageText" \
           -d "chat_id=$TELEGRAM_CHAT_ID" \
           -d "message_id=$edit_msg_id" \
           --data-urlencode "text=$msg" \
           -d "disable_web_page_preview=true" \
           --data-urlencode "reply_markup=$cancel_keyboard" >/dev/null
       else
-        curl -fsS "$api_base/editMessageText" \
+        telegram_text_request "$api_base/editMessageText" \
           -d "chat_id=$TELEGRAM_CHAT_ID" \
           -d "message_id=$edit_msg_id" \
           --data-urlencode "text=$msg" \
@@ -122,19 +211,19 @@ case "$mode" in
       fi
     elif [[ "$return_id" == "true" ]]; then
       if [[ -n "$with_cancel_btn" ]]; then
-        curl -fsS "$api_base/sendMessage" \
+        telegram_text_request "$api_base/sendMessage" \
           -d "chat_id=$TELEGRAM_CHAT_ID" \
           --data-urlencode "text=$msg" \
           -d "disable_web_page_preview=true" \
           --data-urlencode "reply_markup=$cancel_keyboard" | jq -r '.result.message_id'
       else
-        curl -fsS "$api_base/sendMessage" \
+        telegram_text_request "$api_base/sendMessage" \
           -d "chat_id=$TELEGRAM_CHAT_ID" \
           --data-urlencode "text=$msg" \
           -d "disable_web_page_preview=true" | jq -r '.result.message_id'
       fi
     else
-      curl -fsS "$api_base/sendMessage" \
+      telegram_text_request "$api_base/sendMessage" \
         -d "chat_id=$TELEGRAM_CHAT_ID" \
         --data-urlencode "text=$msg" \
         -d "disable_web_page_preview=true" >/dev/null

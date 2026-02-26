@@ -2,7 +2,7 @@ SHELL := /bin/bash
 UNITS := shellclaw.service shellclaw-webhook.service shellclaw-tunnel.service shellclaw-heartbeat.service shellclaw-heartbeat.timer shellclaw-nightly-reflection.service shellclaw-nightly-reflection.timer
 SYSTEMD_DIR := $(HOME)/.config/systemd/user
 
-.PHONY: help install uninstall start stop restart status logs logs-webhook logs-tunnel webhook-register webhook-unregister webhook-status lint test
+.PHONY: help install uninstall start stop restart status logs logs-webhook logs-tunnel webhook-register webhook-unregister webhook-status lint test test-telegram-api
 
 help: ## Show this help
 	@grep -E '^[a-z][-a-z]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -73,3 +73,6 @@ lint: ## Shellcheck all scripts
 
 test: ## Quick smoke test (inject text)
 	./agent.sh --inject-text "ping"
+
+test-telegram-api: ## Unit-style Telegram parse-mode tests
+	./tests/telegram_api_test.sh
