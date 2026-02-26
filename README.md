@@ -2,7 +2,7 @@
 
 **Pure-bash local voice agent that lives in Telegram.**
 
-Send a voice note → local ASR on your laptop → Codex CLI (with real file access + persistent Markdown memory) → local TTS voice reply.
+Send a voice note → local ASR on your laptop → agent provider (`codex` or `pi`) with real file access + persistent Markdown memory → local TTS voice reply.
 
 **Everything is stored in simple, human-readable `.md` files** you can literally `cat` or open in any editor.
 
@@ -14,7 +14,7 @@ No servers. No heavy frameworks. No Docker-compose. Maximum privacy and hackabil
 
 - Full voice round-trip with **local** ASR + TTS
 - Persistent memory & tasks you can read/edit by hand (`cat MEMORY.md`)
-- Uses OpenAI **Codex CLI** as the brain (it can actually read/write your files)
+- Uses provider-switchable agent backend (`codex` default, optional `pi`)
 - Live progress updates in Telegram (edits message with what Codex is doing)
 - `/cancel` command to interrupt long-running requests mid-execution
 - Local web dashboard (`http://localhost:8080`)
@@ -46,11 +46,42 @@ make start             # starts agent (poll mode by default)
 
 Then just send a voice note to your Telegram bot — done!
 
+## Provider Switch (`codex` / `pi`)
+
+ShellClaw keeps `codex` as default and adds `pi` as a non-breaking optional provider.
+
+`codex` (default):
+
+```env
+AGENT_PROVIDER=codex
+CODEX_BIN=codex
+CODEX_MODEL=
+CODEX_REASONING_EFFORT=
+EXEC_POLICY=yolo
+ALLOWLIST_PATH=./config/allowlist.txt
+```
+
+`pi`:
+
+```env
+AGENT_PROVIDER=pi
+PI_BIN=pi
+PI_PROVIDER=
+PI_MODEL=
+PI_MODE=text
+PI_EXTRA_ARGS=
+```
+
+Notes:
+- Marker contract is unchanged: `TELEGRAM_REPLY`, `VOICE_REPLY`, `MEMORY_APPEND`, `TASK_APPEND`.
+- `EXEC_POLICY` and `ALLOWLIST_PATH` are Codex-only knobs.
+- One-line rollback: set `AGENT_PROVIDER=codex` and restart.
+
 ## What it does
 
 - Telegram text and voice input.
 - Local ASR via your own backend (HTTP endpoint or CLI).
-- Agent loop via Codex CLI (`codex exec`).
+- Agent loop via provider CLI (`codex exec` by default, optional `pi -p`).
 - Local TTS backend → Opus OGG → Telegram `sendVoice`.
 - Persistent state in SQLite + human-readable markdown files.
 - Daily logs, proactive heartbeat, and nightly reflection journal.
@@ -68,7 +99,7 @@ Then just send a voice note to your Telegram bot — done!
 ## Repo layout
 
 ```text
-agent.sh                 # Main loop - webhook or poll, context building, Codex orchestration
+agent.sh                 # Main loop - webhook or poll, context building, provider orchestration
 scripts/
   asr.sh                 # Voice note transcription (HTTP or CLI backend)
   tts.sh                 # Text-to-voice conversion with Opus encoding
@@ -93,7 +124,7 @@ TASKS/pending.md         # Task list
 
 - Bash 5+
 - `curl`, `jq`, `ffmpeg`, `sqlite3`
-- `codex` CLI in `PATH`
+- `codex` CLI in `PATH` (default provider) or `pi` CLI in `PATH` (optional provider)
 - A working ASR backend
 - A working TTS backend
 - `cloudflared` (for webhook mode with Cloudflare Tunnel)
@@ -530,6 +561,11 @@ Copy `.env.example` to `.env`, then set at minimum:
 - `TELEGRAM_CHAT_ID`
 - `CODEX_BIN` (if `codex` is not in systemd/user PATH)
 
+Optional Telegram rendering:
+- `TELEGRAM_PARSE_MODE=off|Markdown|MarkdownV2|HTML` (default `off`)
+- When enabled, agent output instructions allow matching formatted replies in `TELEGRAM_REPLY`.
+- If parse mode causes invalid entity errors, ShellClaw auto-retries without parse mode for that message.
+
 Then choose one ASR mode:
 - `ASR_URL` for HTTP ASR service
 - or `ASR_CMD_TEMPLATE` for CLI-based ASR
@@ -588,6 +624,7 @@ make webhook-register  # register Telegram webhook
 make webhook-status    # check webhook info
 make lint              # shellcheck all scripts
 make test              # smoke test via --inject-text
+make test-telegram-api # Telegram parse-mode tests (offline/mocked)
 ```
 
 ## systemd services
