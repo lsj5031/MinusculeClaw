@@ -12,7 +12,7 @@ QUEUE_PATH = os.path.join(INSTANCE_DIR, "runtime", "webhook_updates.jsonl")
 LOCK_PATH = os.path.join(INSTANCE_DIR, "runtime", "webhook_queue.lock")
 FIFO_PATH = os.path.join(INSTANCE_DIR, "runtime", "webhook_notify.fifo")
 CANCEL_PATH = os.path.join(INSTANCE_DIR, "runtime", "cancel")
-PID_PATH = os.path.join(INSTANCE_DIR, "runtime", "codex.pid")
+PID_PATH = os.path.join(INSTANCE_DIR, "runtime", "agent.pid")
 BIND = os.environ.get("WEBHOOK_BIND", "127.0.0.1:8787")
 HOST, PORT = BIND.rsplit(":", 1)
 PORT = int(PORT)
@@ -24,7 +24,7 @@ os.makedirs(os.path.dirname(QUEUE_PATH), exist_ok=True)
 
 
 def _signal_cancel():
-    """Write cancel signal and kill running codex process."""
+    """Write cancel signal and kill running agent process."""
     try:
         with open(CANCEL_PATH, "w"):
             pass

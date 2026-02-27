@@ -76,6 +76,13 @@ ensure_db_migrations() {
   fi
 
   sqlite_exec "CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_update_id_unique ON turns(update_id);"
+
+  local has_codex_raw
+  has_codex_raw="$(sqlite3 "$SQLITE_DB_PATH" "SELECT 1 FROM pragma_table_info('turns') WHERE name='codex_raw' LIMIT 1;")"
+  if [[ "$has_codex_raw" == "1" ]]; then
+    log_info "db migration: renaming turns.codex_raw → agent_raw"
+    sqlite_exec "ALTER TABLE turns RENAME COLUMN codex_raw TO agent_raw;"
+  fi
 }
 
 register_bot_commands() {
@@ -299,6 +306,9 @@ codex_stream_monitor() {
 ${status_text}"
       else
         status_log="$status_text"
+      fi
+      if (( ${#status_log} > 4500 )); then
+        status_log="…${status_log: -4000}"
       fi
       local now
       now="$(date +%s)"
@@ -678,6 +688,9 @@ ${status_text}"
       else
         status_log="$status_text"
       fi
+      if (( ${#status_log} > 4500 )); then
+        status_log="…${status_log: -4000}"
+      fi
       local now
       now="$(date +%s)"
       if (( now - last_edit_ts >= 3 )); then
@@ -909,7 +922,7 @@ store_turn() {
   local input_type="$3"
   local user_text="$4"
   local asr_text="$5"
-  local codex_raw="$6"
+  local agent_raw="$6"
   local telegram_reply="$7"
   local voice_reply="$8"
   local status="$9"
@@ -920,7 +933,7 @@ store_turn() {
   fi
 
   local changes
-  changes="$(sqlite3 "$SQLITE_DB_PATH" "INSERT OR IGNORE INTO turns(ts, chat_id, input_type, user_text, asr_text, codex_raw, telegram_reply, voice_reply, status, update_id) VALUES($(sql_quote "$ts"), $(sql_quote "$chat_id"), $(sql_quote "$input_type"), $(sql_quote "$user_text"), $(sql_quote "$asr_text"), $(sql_quote "$codex_raw"), $(sql_quote "$telegram_reply"), $(sql_quote "$voice_reply"), $(sql_quote "$status"), $update_id_sql); SELECT changes();")"
+  changes="$(sqlite3 "$SQLITE_DB_PATH" "INSERT OR IGNORE INTO turns(ts, chat_id, input_type, user_text, asr_text, agent_raw, telegram_reply, voice_reply, status, update_id) VALUES($(sql_quote "$ts"), $(sql_quote "$chat_id"), $(sql_quote "$input_type"), $(sql_quote "$user_text"), $(sql_quote "$asr_text"), $(sql_quote "$agent_raw"), $(sql_quote "$telegram_reply"), $(sql_quote "$voice_reply"), $(sql_quote "$status"), $update_id_sql); SELECT changes();")"
   changes="${changes##*$'\n'}"
   printf '%s\n' "${changes:-0}"
 }
@@ -1090,7 +1103,7 @@ telegram_get_updates() {
   curl -fsS "$api_base/getUpdates" \
     -d "offset=$offset" \
     -d "timeout=$timeout" \
-    -d 'allowed_updates=["message"]'
+    -d 'allowed_updates=["message","callback_query"]'
 }
 
 download_telegram_file() {
@@ -1116,6 +1129,29 @@ process_update_obj() {
   local update_id chat_id message_text voice_file_id input_type turn_update_id
 
   update_id="$(extract_update_id "$obj")"
+
+  # Handle callback_query updates (e.g. cancel button) consumed via poll
+  local cb_data cb_id cb_chat_id
+  cb_data="$(jq -r '.callback_query.data // empty' <<< "$obj" 2>/dev/null)"
+  if [[ -n "$cb_data" ]]; then
+    cb_id="$(jq -r '.callback_query.id // empty' <<< "$obj" 2>/dev/null)"
+    cb_chat_id="$(jq -r '.callback_query.message.chat.id // empty' <<< "$obj" 2>/dev/null)"
+    if [[ "$cb_data" == "cancel" && "$cb_chat_id" == "$TELEGRAM_CHAT_ID" ]]; then
+      log_info "cancel button callback update_id=$update_id"
+      "$ROOT_DIR/scripts/telegram_api.sh" --answer-callback "$cb_id" 2>/dev/null || true
+      if [[ -f "$AGENT_PID_FILE" ]]; then
+        touch "$CANCEL_FILE"
+        local cancel_pid
+        cancel_pid="$(cat "$AGENT_PID_FILE" 2>/dev/null)" || true
+        if [[ -n "$cancel_pid" ]] && kill -0 "$cancel_pid" 2>/dev/null; then
+          terminate_agent_process "$AGENT_PROVIDER" "$cancel_pid"
+        fi
+      fi
+    fi
+    set_kv "last_update_id" "$update_id"
+    return 0
+  fi
+
   chat_id="$(jq -r '.message.chat.id // empty' <<< "$obj")"
   turn_update_id=""
   if [[ "$update_id" != "0" ]]; then
@@ -1146,7 +1182,7 @@ process_update_obj() {
 
   if [[ "$chat_id" == "$TELEGRAM_CHAT_ID" && "${message_text,,}" =~ ^/fresh$ ]]; then
     log_info "ack /fresh update_id=$update_id – inserting context boundary"
-    sqlite3 "$SQLITE_DB_PATH" "INSERT INTO turns(ts, chat_id, input_type, user_text, codex_raw, telegram_reply, status, update_id)
+    sqlite3 "$SQLITE_DB_PATH" "INSERT INTO turns(ts, chat_id, input_type, user_text, agent_raw, telegram_reply, status, update_id)
       VALUES($(sql_quote "$(iso_now)"), $(sql_quote "$chat_id"), 'system', '---CONTEXT_BOUNDARY---', '', '', 'boundary', $(sql_quote "$update_id"));"
     "$ROOT_DIR/scripts/telegram_api.sh" --text "🧹 Context cleared. Fresh start!" 2>/dev/null || true
     set_kv "last_update_id" "$update_id"
@@ -1420,6 +1456,7 @@ webhook_loop() {
   drain_webhook_queue
 
   while true; do
+    load_env
     # Block until services/webhook_server.py signals or 30s safety timeout
     read -r -t 30 -n 1 <&3 || true
     drain_webhook_queue

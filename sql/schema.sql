@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS turns (
   input_type TEXT NOT NULL,
   user_text TEXT,
   asr_text TEXT,
-  codex_raw TEXT NOT NULL,
+  agent_raw TEXT NOT NULL,
   telegram_reply TEXT,
   voice_reply TEXT,
   status TEXT NOT NULL,

@@ -194,39 +194,20 @@ send_file() {
 
 case "$mode" in
   text)
+    text_args=()
     if [[ -n "$edit_msg_id" ]]; then
-      if [[ -n "$with_cancel_btn" ]]; then
-        telegram_text_request "$api_base/editMessageText" \
-          -d "chat_id=$TELEGRAM_CHAT_ID" \
-          -d "message_id=$edit_msg_id" \
-          --data-urlencode "text=$msg" \
-          -d "disable_web_page_preview=true" \
-          --data-urlencode "reply_markup=$cancel_keyboard" >/dev/null
-      else
-        telegram_text_request "$api_base/editMessageText" \
-          -d "chat_id=$TELEGRAM_CHAT_ID" \
-          -d "message_id=$edit_msg_id" \
-          --data-urlencode "text=$msg" \
-          -d "disable_web_page_preview=true" >/dev/null
-      fi
-    elif [[ "$return_id" == "true" ]]; then
-      if [[ -n "$with_cancel_btn" ]]; then
-        telegram_text_request "$api_base/sendMessage" \
-          -d "chat_id=$TELEGRAM_CHAT_ID" \
-          --data-urlencode "text=$msg" \
-          -d "disable_web_page_preview=true" \
-          --data-urlencode "reply_markup=$cancel_keyboard" | jq -r '.result.message_id'
-      else
-        telegram_text_request "$api_base/sendMessage" \
-          -d "chat_id=$TELEGRAM_CHAT_ID" \
-          --data-urlencode "text=$msg" \
-          -d "disable_web_page_preview=true" | jq -r '.result.message_id'
-      fi
+      text_args+=("$api_base/editMessageText" -d "chat_id=$TELEGRAM_CHAT_ID" -d "message_id=$edit_msg_id")
     else
-      telegram_text_request "$api_base/sendMessage" \
-        -d "chat_id=$TELEGRAM_CHAT_ID" \
-        --data-urlencode "text=$msg" \
-        -d "disable_web_page_preview=true" >/dev/null
+      text_args+=("$api_base/sendMessage" -d "chat_id=$TELEGRAM_CHAT_ID")
+    fi
+    text_args+=(--data-urlencode "text=$msg" -d "disable_web_page_preview=true")
+    if [[ -n "$with_cancel_btn" ]]; then
+      text_args+=(--data-urlencode "reply_markup=$cancel_keyboard")
+    fi
+    if [[ -z "$edit_msg_id" && "$return_id" == "true" ]]; then
+      telegram_text_request "${text_args[@]}" | jq -r '.result.message_id'
+    else
+      telegram_text_request "${text_args[@]}" >/dev/null
     fi
     ;;
   remove_keyboard)
