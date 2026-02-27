@@ -196,7 +196,18 @@ validate_runtime_requirements() {
 extract_marker() {
   local marker="$1"
   local payload="$2"
-  printf '%s\n' "$payload" | awk -v m="$marker" 'index($0, m ":") == 1 { sub("^" m ":[[:space:]]*", "", $0); print; exit }'
+  printf '%s\n' "$payload" | awk -v m="$marker" '
+    BEGIN {
+      marker_re = "^(TELEGRAM_REPLY|VOICE_REPLY|MEMORY_APPEND|TASK_APPEND|SEND_PHOTO|SEND_DOCUMENT|SEND_VIDEO):"
+    }
+    found && $0 ~ marker_re { exit }
+    !found && index($0, m ":") == 1 {
+      sub("^" m ":[[:space:]]*", "", $0)
+      found = 1; buf = $0; next
+    }
+    found { buf = buf "\n" $0 }
+    END { if (found) print buf }
+  '
 }
 
 extract_all_markers() {
@@ -522,6 +533,8 @@ build_context_file() {
     case "${TELEGRAM_PARSE_MODE:-off}" in
       Markdown | MarkdownV2)
         echo "Use valid ${TELEGRAM_PARSE_MODE} formatting in TELEGRAM_REPLY when useful."
+        echo "Keep formatting simple: no nested styles, no unmatched markers, and no marker breaks across lines."
+        echo "If unsure, use plain text."
         echo "Do not use code fences or extra prefixes."
         ;;
       HTML)

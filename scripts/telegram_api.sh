@@ -130,6 +130,21 @@ escape_markdownv2_text() {
   printf '%s' "$text"
 }
 
+strip_markdown_like_text() {
+  local text="$1"
+  # Fallback path only: remove common markdown markers so users do not see raw
+  # formatting tokens when parse-mode validation fails.
+  text="${text//\\/}"
+  text="${text//\`\`\`/}"
+  text="${text//\`/}"
+  text="${text//\*\*/}"
+  text="${text//\*/}"
+  text="${text//__/}"
+  text="${text//~~/}"
+  text="${text//||/}"
+  printf '%s' "$text"
+}
+
 telegram_text_request() {
   local -a raw_request=("$@")
   local -a raw_cmd=(curl -fsS "${raw_request[@]}")
@@ -169,10 +184,38 @@ telegram_text_request() {
   fi
 
   if declare -F log_warn >/dev/null 2>&1; then
-    log_warn "text request failed with TELEGRAM_PARSE_MODE=$telegram_parse_mode; retrying without parse mode"
+    log_warn "text request failed with TELEGRAM_PARSE_MODE=$telegram_parse_mode"
   else
-    echo "WARN: text request failed with TELEGRAM_PARSE_MODE=$telegram_parse_mode; retrying without parse mode" >&2
+    echo "WARN: text request failed with TELEGRAM_PARSE_MODE=$telegram_parse_mode" >&2
   fi
+
+  if [[ "$telegram_parse_mode" == "MarkdownV2" ]]; then
+    local -a plain_request=()
+    local idx=0
+    while [[ $idx -lt ${#raw_request[@]} ]]; do
+      if [[ "${raw_request[$idx]}" == "--data-urlencode" ]] \
+        && [[ $((idx + 1)) -lt ${#raw_request[@]} ]] \
+        && [[ "${raw_request[$((idx + 1))]}" == text=* ]]; then
+        local raw_text="${raw_request[$((idx + 1))]#text=}"
+        local plain_text
+        plain_text="$(strip_markdown_like_text "$raw_text")"
+        plain_request+=("--data-urlencode" "text=$plain_text")
+        idx=$((idx + 2))
+        continue
+      fi
+      plain_request+=("${raw_request[$idx]}")
+      idx=$((idx + 1))
+    done
+
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "retrying MarkdownV2 message as cleaned plain text"
+    else
+      echo "WARN: retrying MarkdownV2 message as cleaned plain text" >&2
+    fi
+    curl -fsS "${plain_request[@]}"
+    return 0
+  fi
+
   "${raw_cmd[@]}"
 }
 
