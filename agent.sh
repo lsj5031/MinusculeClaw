@@ -1471,6 +1471,7 @@ poll_once() {
 main_loop() {
   log_info "poll loop started (interval=${POLL_INTERVAL_SECONDS}s)"
   while true; do
+    load_env
     poll_once
     sleep "$POLL_INTERVAL_SECONDS"
   done
