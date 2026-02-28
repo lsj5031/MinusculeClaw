@@ -118,6 +118,16 @@ Running a long task? Send `/cancel` to stop it immediately.
 
 ---
 
+## Built-in Commands
+
+| Command | Action |
+|---------|--------|
+| `/fresh` | Reset the conversation context (clears recent history). |
+| `/cancel` | Force-stop the current running agent task. |
+| `/help` | (Optional) Show available commands (if implemented in your provider). |
+
+---
+
 ## Architecture Overview
 
 ```mermaid
@@ -237,6 +247,17 @@ AGENT_CMD_TEMPLATE='my-agent-cli --mode text'
 
 When `AGENT_PROVIDER=script`, ShellClaw sends runtime context on stdin and expects marker lines (`TELEGRAM_REPLY: ...`) on stdout.
 
+### Custom Agent Script Contract
+
+If you want to use your own LLM logic or a different agent engine, point `AGENT_CMD_TEMPLATE` to your script. ShellClaw will pass a JSON-like context to your script's `stdin` including:
+- Recent conversation history.
+- Contents of `SOUL.md` (personality).
+- Contents of `USER.md` (preferences).
+- Contents of `MEMORY.md` (facts).
+- Current task list from `TASKS/pending.md`.
+
+Your script MUST output at least one line starting with `TELEGRAM_REPLY: ` followed by the response text.
+
 ---
 
 ## Operating Modes
@@ -287,6 +308,8 @@ make stop      # Stop all services
 make status    # Check service status
 make logs      # View live logs
 ```
+
+> **Pro Tip**: `make install` automatically runs `loginctl enable-linger $USER`. This ensures your bot services continue running even after you disconnect from your SSH session.
 
 ### Available Services
 
@@ -345,9 +368,13 @@ ShellClaw's AI can respond with various output types:
 
 | Mode | Flag | Behavior |
 |------|------|----------|
-| `yolo` | `--dangerously-bypass-sandbox` | Unrestricted execution (default) |
-| `allowlist` | `--full-auto` | Auto-approve allowed commands only |
-| `strict` | (none) | Require approval for all actions |
+| `yolo` | `--dangerously-bypass-sandbox` | Unrestricted execution (default). |
+| `allowlist` | `--full-auto` | Only auto-approves commands listed in `config/allowlist.txt`. |
+| `strict` | (none) | Require manual approval for all actions. |
+
+### Using Allowlist Mode
+
+When `EXEC_POLICY=allowlist` is set, ShellClaw will automatically execute commands like `ls`, `cat`, or `grep` if they are explicitly listed in `config/allowlist.txt`. This provides a middle ground between total freedom (`yolo`) and manual approval for every single command (`strict`).
 
 ⚠️ **Default mode is `yolo`** — use on trusted machines only.
 
@@ -369,11 +396,28 @@ View your conversation history in a local web UI:
 ## Requirements
 
 - **Bash** 5+
-- **curl**, **jq**, **ffmpeg**, **sqlite3**
-- **Codex CLI** in PATH
-- ASR backend (for voice input)
-- TTS backend (for voice output)
-- **cloudflared** (for webhook mode)
+- **Python** 3.10+ (for `dashboard.py` and `webhook_server.py`)
+- **System Utils**: `curl`, `jq`, `ffmpeg`, `sqlite3`
+- **AI Backend**: `codex` CLI in PATH (or your preferred agent CLI)
+- **Voice (Optional)**: ASR backend for voice input, TTS backend for voice output
+- **Webhook (Optional)**: `cloudflared` (for Cloudflare Tunnel)
+
+---
+
+## Troubleshooting
+
+### Bot is not responding in Telegram Groups
+By default, bots in groups only see messages that start with `/` or mention them. To allow ShellClaw to see all messages, talk to @BotFather and **Disable Privacy Mode** for your bot.
+
+### Webhook Registration Failed
+Ensure `cloudflared` is running and the tunnel is healthy. You can manually test the webhook endpoint:
+```bash
+curl -X POST https://your-tunnel-url.trycloudflare.com/webhook -d '{"message": {"text": "ping"}}'
+```
+
+### Voice Recognition (ASR) is Slow or Inaccurate
+- Check if your ASR backend is using GPU acceleration.
+- Ensure the input audio format (OGG/OPUS from Telegram) is supported by your ASR script.
 
 ---
 
