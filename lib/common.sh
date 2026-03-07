@@ -94,3 +94,45 @@ trim() {
   x="${x%"${x##*[![:space:]]}"}"
   printf '%s' "$x"
 }
+
+update_stream_status() {
+  local msg_id="$1"
+  local status_text="$2"
+  local -n ref_status_log="$3"
+  local -n ref_last_edit_ts="$4"
+
+  if [[ -n "$status_text" ]]; then
+    if [[ -n "$ref_status_log" ]]; then
+      ref_status_log="${ref_status_log}"$'\n'"${status_text}"
+    else
+      ref_status_log="$status_text"
+    fi
+    if (( ${#ref_status_log} > 4500 )); then
+      ref_status_log="…${ref_status_log: -4000}"
+    fi
+    local now
+    now="$(date +%s)"
+    if (( now - ref_last_edit_ts >= 3 )); then
+      local edit_text="$ref_status_log"
+      if (( ${#edit_text} > 4000 )); then
+        edit_text="…${edit_text: -3900}"
+      fi
+      "$ROOT_DIR/scripts/telegram_api.sh" --edit "$msg_id" --text "$edit_text" --with-cancel-btn 2>/dev/null || true
+      "$ROOT_DIR/scripts/telegram_api.sh" --typing 2>/dev/null || true
+      ref_last_edit_ts=$now
+    fi
+  fi
+}
+
+finalize_stream_status() {
+  local msg_id="$1"
+  local status_log="$2"
+
+  if [[ -n "$status_log" ]]; then
+    local edit_text="$status_log"
+    if (( ${#edit_text} > 4000 )); then
+      edit_text="…${edit_text: -3900}"
+    fi
+    "$ROOT_DIR/scripts/telegram_api.sh" --edit "$msg_id" --text "$edit_text" 2>/dev/null || true
+  fi
+}
