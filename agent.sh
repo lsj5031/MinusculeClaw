@@ -378,6 +378,7 @@ send_long_reply_as_file() {
 
 codex_stream_monitor() {
   local msg_id="$1"
+  # shellcheck disable=SC2034
   local last_edit_ts=0
   local status_log=""
   while IFS= read -r line; do
@@ -405,36 +406,9 @@ codex_stream_monitor() {
             status_text="📝 Edited: ${fp}" ;;
         esac ;;
     esac
-    if [[ -n "$status_text" ]]; then
-      if [[ -n "$status_log" ]]; then
-        status_log="${status_log}
-${status_text}"
-      else
-        status_log="$status_text"
-      fi
-      if (( ${#status_log} > 4500 )); then
-        status_log="…${status_log: -4000}"
-      fi
-      local now
-      now="$(date +%s)"
-      if (( now - last_edit_ts >= 3 )); then
-        local edit_text="$status_log"
-        if (( ${#edit_text} > 4000 )); then
-          edit_text="…${edit_text: -3900}"
-        fi
-        "$ROOT_DIR/scripts/telegram_api.sh" --edit "$msg_id" --text "$edit_text" --with-cancel-btn 2>/dev/null || true
-        "$ROOT_DIR/scripts/telegram_api.sh" --typing 2>/dev/null || true
-        last_edit_ts=$now
-      fi
-    fi
+    update_stream_status "$msg_id" "$status_text" status_log last_edit_ts
   done
-  if [[ -n "$status_log" ]]; then
-    local edit_text="$status_log"
-    if (( ${#edit_text} > 4000 )); then
-      edit_text="…${edit_text: -3900}"
-    fi
-    "$ROOT_DIR/scripts/telegram_api.sh" --edit "$msg_id" --text "$edit_text" 2>/dev/null || true
-  fi
+  finalize_stream_status "$msg_id" "$status_log"
 }
 
 check_cancel_poll() {
@@ -787,6 +761,7 @@ run_codex() {
 
 pi_stream_monitor() {
   local msg_id="$1"
+  # shellcheck disable=SC2034
   local last_edit_ts=0
   local status_log=""
   while IFS= read -r line; do
@@ -832,36 +807,9 @@ pi_stream_monitor() {
         status_text="🔁 Retrying…"
         ;;
     esac
-    if [[ -n "$status_text" ]]; then
-      if [[ -n "$status_log" ]]; then
-        status_log="${status_log}
-${status_text}"
-      else
-        status_log="$status_text"
-      fi
-      if (( ${#status_log} > 4500 )); then
-        status_log="…${status_log: -4000}"
-      fi
-      local now
-      now="$(date +%s)"
-      if (( now - last_edit_ts >= 3 )); then
-        local edit_text="$status_log"
-        if (( ${#edit_text} > 4000 )); then
-          edit_text="…${edit_text: -3900}"
-        fi
-        "$ROOT_DIR/scripts/telegram_api.sh" --edit "$msg_id" --text "$edit_text" --with-cancel-btn 2>/dev/null || true
-        "$ROOT_DIR/scripts/telegram_api.sh" --typing 2>/dev/null || true
-        last_edit_ts=$now
-      fi
-    fi
+    update_stream_status "$msg_id" "$status_text" status_log last_edit_ts
   done
-  if [[ -n "$status_log" ]]; then
-    local edit_text="$status_log"
-    if (( ${#edit_text} > 4000 )); then
-      edit_text="…${edit_text: -3900}"
-    fi
-    "$ROOT_DIR/scripts/telegram_api.sh" --edit "$msg_id" --text "$edit_text" 2>/dev/null || true
-  fi
+  finalize_stream_status "$msg_id" "$status_log"
 }
 
 pi_extract_final_from_json() {
