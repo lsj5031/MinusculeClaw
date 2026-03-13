@@ -250,14 +250,6 @@ extract_all_markers() {
   '
 }
 
-safe_send_text() {
-  local msg="$1"
-  if [[ -z "$(trim "$msg")" ]]; then
-    return 0
-  fi
-  "$ROOT_DIR/scripts/telegram_api.sh" --text "$msg"
-}
-
 safe_send_voice() {
   local text="$1"
   local caption="${2:-}"
